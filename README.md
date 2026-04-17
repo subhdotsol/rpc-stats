@@ -20,6 +20,10 @@ RPC stats is a continuously running monitoring system that sends controlled test
 
 ---
 
+## All Planned Endpoints Till Now
+
+https://subhisgreat.notion.site/RPC-STATS-endpoints-34517f1447c180fcbf3df227ce112dae?source=copy_link
+
 ## Core Idea
 
 A live public scoreboard that silently tests every major Solana RPC provider every thirty seconds and reveals which providers actually land transactions under real network conditions.
