@@ -1,5 +1,5 @@
 [package]
-name = "cache"
+name = "scheduler-service"
 version = "0.1.0"
 edition = "2024"
 
