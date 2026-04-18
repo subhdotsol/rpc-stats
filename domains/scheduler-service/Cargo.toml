@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+rpc-core = { path = "../../crates/core", package = "core" }
 anyhow.workspace = true
-bs58 = "0.5.1"
 dotenvy = "0.15"
+bs58 = "0.5.1"
 serde_json.workspace = true
 shellexpand = "3.1.2"
 solana-client = "3.1.12"
@@ -15,4 +16,6 @@ solana-program = "3.0.0"
 solana-commitment-config = "3.1.1"
 solana-system-interface = "3.2.0"
 tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true }
 uuid.workspace = true

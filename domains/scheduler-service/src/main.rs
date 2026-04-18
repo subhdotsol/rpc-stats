@@ -1,3 +1,4 @@
+use rpc_core::{config::Config, types::rpc::{RpcProvider, SentTx}};
 use serde_json::json;
 use solana_client::rpc_client::RpcClient;
 use solana_commitment_config::CommitmentConfig;
@@ -8,31 +9,13 @@ use solana_sdk::{
     signature::{Keypair, Signer},
     transaction::Transaction,
 };
-use std::{
-    str::FromStr,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{str::FromStr, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
 use tokio::time::{Duration, sleep};
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 const MEMO_PROGRAM_ID: &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
-
-//  Replace with your funded keypair path
-const KEYPAIR_PATH: &str = "~/.config/solana/id.json";
-
-#[derive(Clone)]
-struct RpcProvider {
-    name: String,
-    url: String,
-}
-
-#[derive(Debug)]
-struct SentTx {
-    signature: String,
-    provider: String,
-    timestamp: u128,
-}
 
 fn now_ms() -> u128 {
     SystemTime::now()
@@ -66,14 +49,16 @@ async fn send_tx(provider: RpcProvider, payer: Arc<Keypair>) -> anyhow::Result<S
     .to_string();
 
     let memo_ix = create_memo_ix(memo_payload);
-
     let message = Message::new(&[memo_ix], Some(&payer.pubkey()));
-
     let tx = Transaction::new(&[payer.as_ref()], message, recent_blockhash);
 
     let signature = client.send_transaction(&tx)?;
 
-    println!(" Sent via {} → {}", provider.name, signature);
+    info!(
+        provider = %provider.name,
+        signature = %signature,
+        "Transaction sent"
+    );
 
     Ok(SentTx {
         signature: signature.to_string(),
@@ -84,27 +69,40 @@ async fn send_tx(provider: RpcProvider, payer: Arc<Keypair>) -> anyhow::Result<S
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    
     dotenvy::dotenv().ok();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
 
-    //  Add your RPC providers here
+    let config = Config::from_env()?;
+
+    info!(
+        probe_interval_secs = config.probe_interval_secs,
+        "Starting Prober"
+    );
+
     let providers = vec![
         RpcProvider {
             name: "helius".to_string(),
-            url: std::env::var("HELIUS_RPC")?,
+            url: config.helius_rpc.clone(),
         },
         RpcProvider {
             name: "alchemy".to_string(),
-            url: std::env::var("ALCHEMY_RPC")?,
+            url: config.alchemy_rpc.clone(),
         },
     ];
 
-    // Load payer
+    // Load payer keypair from the configured path
     let payer = Arc::new(
-        solana_sdk::signature::read_keypair_file(shellexpand::tilde(KEYPAIR_PATH).to_string())
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        solana_sdk::signature::read_keypair_file(
+            shellexpand::tilde(&config.keypair_path).to_string(),
+        )
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?,
     );
-
-    println!("Starting Prober...");
 
     loop {
         let mut handles = vec![];
@@ -116,7 +114,7 @@ async fn main() -> anyhow::Result<()> {
                 match send_tx(provider.clone(), payer).await {
                     Ok(sent) => Some(sent),
                     Err(e) => {
-                        eprintln!("{} failed: {:?}", provider.name, e);
+                        error!(provider = %provider.name, error = ?e, "Transaction failed");
                         None
                     }
                 }
@@ -131,8 +129,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        println!("Batch complete: {} tx sent\n", results.len());
+        info!(sent = results.len(), "Probe batch complete");
 
-        sleep(Duration::from_secs(30)).await;
+        sleep(Duration::from_secs(config.probe_interval_secs)).await;
     }
 }

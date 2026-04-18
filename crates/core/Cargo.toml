@@ -7,3 +7,5 @@ edition = "2024"
 serde = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+figment = { workspace = true }
+tracing = { workspace = true }
