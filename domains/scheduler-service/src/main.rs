@@ -1,10 +1,11 @@
 use chrono::Utc;
+use dashmap::DashMap;
+use kafka::FutureProducer;
+use kafka::topics::tx_submitted::produce_tx_submitted;
 use rpc_core::{
     config::Config,
     types::rpc::{RpcProvider, SentTx, TxSubmitted},
 };
-use kafka::topics::tx_submitted::produce_tx_submitted;
-use kafka::FutureProducer;
 use serde_json::json;
 use solana_client::rpc_client::RpcClient;
 use solana_commitment_config::CommitmentConfig;
@@ -20,7 +21,7 @@ use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -46,6 +47,7 @@ async fn send_tx(
     provider: RpcProvider,
     payer: Arc<Keypair>,
     producer: Arc<FutureProducer>,
+    sent_map: Arc<DashMap<String, SentTx>>,
 ) -> anyhow::Result<SentTx> {
     let client =
         RpcClient::new_with_commitment(provider.url.clone(), CommitmentConfig::processed());
@@ -74,10 +76,19 @@ async fn send_tx(
         "Transaction sent"
     );
 
+    let sent_tx = SentTx {
+        signature: signature.to_string(),
+        provider: provider.name.clone(),
+        timestamp,
+    };
+
+    // Store in shared map for tracking
+    sent_map.insert(signature.to_string(), sent_tx.clone());
+
     // Produce to Kafka
     let kafka_tx = TxSubmitted {
         signature: signature.to_string(),
-        provider: provider.name.clone(),
+        provider: provider.name,
         timestamp: Utc::now(),
     };
 
@@ -85,21 +96,15 @@ async fn send_tx(
         eprintln!("Failed to produce to Kafka: {:?}", e);
     }
 
-    Ok(SentTx {
-        signature: signature.to_string(),
-        provider: provider.name,
-        timestamp,
-    })
+    Ok(sent_tx)
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
@@ -111,6 +116,23 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let producer = Arc::new(kafka::create_producer(&config.kafka_brokers));
+
+    // shared dashmap
+    let sent_map: Arc<DashMap<String, SentTx>> = Arc::new(DashMap::new());
+
+    // preventing memory leak
+    {
+        let cleanup_map = sent_map.clone();
+        tokio::spawn(async move {
+            loop {
+                let now = now_ms();
+
+                cleanup_map.retain(|_, tx| now - tx.timestamp < 60_000);
+
+                sleep(Duration::from_secs(10)).await;
+            }
+        });
+    }
 
     //  Add your RPC providers here
     let providers = vec![
@@ -140,9 +162,10 @@ async fn main() -> anyhow::Result<()> {
         for provider in providers.clone() {
             let payer = payer.clone();
             let producer = producer.clone();
+            let sent_map = sent_map.clone();
 
             handles.push(tokio::spawn(async move {
-                match send_tx(provider.clone(), payer, producer).await {
+                match send_tx(provider.clone(), payer, producer, sent_map).await {
                     Ok(sent) => Some(sent),
                     Err(e) => {
                         error!(provider = %provider.name, error = ?e, "Transaction failed");
@@ -160,7 +183,11 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        info!(sent = results.len(), "Probe batch complete");
+        info!(
+            sent = results.len(),
+            tracked = sent_map.len(),
+            "Probe batch complete"
+        );
 
         sleep(Duration::from_secs(config.probe_interval_secs)).await;
     }

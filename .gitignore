@@ -1,3 +1,7 @@
 /target
 .env
 Cargo.lock
+claude-session.jsonl
+codex-session.jsonl
+grant-application.txt
+.superstack
