@@ -27,22 +27,22 @@ alert:
 
 # Run targets for specific services
 run-api:
-	cd domains/api && cargo run -p api
+	cd domains/api && cargo run
 
 run-scheduler:
-	cd domains/scheduler-service && cargo run -p scheduler-service
+	cd domains/scheduler-service && cargo run
 
 run-worker:
-	cd domains/worker-service && cargo run -p worker-service
+	cd domains/worker-service && cargo run
 
 run-ingestion:
-	cd domains/ingestion-service && cargo run -p ingestion-service
+	cd domains/ingestion-service && cargo run
 
 run-incident:
-	cd domains/incident-service && cargo run -p incident-service
+	cd domains/incident-service && cargo run
 
 run-alert:
-	cd domains/alert-service && cargo run -p alert-service
+	cd domains/alert-service && cargo run
 
 # Testing and Maintenance
 test:
