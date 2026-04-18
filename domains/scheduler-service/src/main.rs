@@ -1,3 +1,6 @@
+use chrono::Utc;
+use kafka::topics::tx_submitted::{produce_tx_submitted, TxSubmitted};
+use kafka::FutureProducer;
 use serde_json::json;
 use solana_client::rpc_client::RpcClient;
 use solana_commitment_config::CommitmentConfig;
@@ -13,7 +16,7 @@ use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::time::{Duration, sleep};
+use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 const MEMO_PROGRAM_ID: &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
@@ -49,7 +52,11 @@ fn create_memo_ix(data: String) -> Instruction {
     }
 }
 
-async fn send_tx(provider: RpcProvider, payer: Arc<Keypair>) -> anyhow::Result<SentTx> {
+async fn send_tx(
+    provider: RpcProvider,
+    payer: Arc<Keypair>,
+    producer: Arc<FutureProducer>,
+) -> anyhow::Result<SentTx> {
     let client =
         RpcClient::new_with_commitment(provider.url.clone(), CommitmentConfig::processed());
 
@@ -75,6 +82,17 @@ async fn send_tx(provider: RpcProvider, payer: Arc<Keypair>) -> anyhow::Result<S
 
     println!(" Sent via {} → {}", provider.name, signature);
 
+    // Produce to Kafka
+    let kafka_tx = TxSubmitted {
+        signature: signature.to_string(),
+        provider: provider.name.clone(),
+        timestamp: Utc::now(),
+    };
+
+    if let Err(e) = produce_tx_submitted(&producer, &kafka_tx).await {
+        eprintln!("Failed to produce to Kafka: {:?}", e);
+    }
+
     Ok(SentTx {
         signature: signature.to_string(),
         provider: provider.name,
@@ -85,6 +103,9 @@ async fn send_tx(provider: RpcProvider, payer: Arc<Keypair>) -> anyhow::Result<S
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
+
+    let kafka_brokers = std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:9092".to_string());
+    let producer = Arc::new(kafka::create_producer(&kafka_brokers));
 
     //  Add your RPC providers here
     let providers = vec![
@@ -104,16 +125,17 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!(e.to_string()))?,
     );
 
-    println!("Starting Prober...");
+    println!("Starting Prober with Kafka at {}...", kafka_brokers);
 
     loop {
         let mut handles = vec![];
 
         for provider in providers.clone() {
             let payer = payer.clone();
+            let producer = producer.clone();
 
             handles.push(tokio::spawn(async move {
-                match send_tx(provider.clone(), payer).await {
+                match send_tx(provider.clone(), payer, producer).await {
                     Ok(sent) => Some(sent),
                     Err(e) => {
                         eprintln!("{} failed: {:?}", provider.name, e);
