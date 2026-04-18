@@ -1,5 +1,8 @@
 use chrono::Utc;
-use rpc_core::types::TxSubmitted;
+use rpc_core::{
+    config::Config,
+    types::rpc::{RpcProvider, SentTx, TxSubmitted},
+};
 use kafka::topics::tx_submitted::produce_tx_submitted;
 use kafka::FutureProducer;
 use serde_json::json;
@@ -18,6 +21,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::time::{sleep, Duration};
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 const MEMO_PROGRAM_ID: &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
@@ -105,8 +110,7 @@ async fn main() -> anyhow::Result<()> {
         "Starting Prober"
     );
 
-    let kafka_brokers = std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:9092".to_string());
-    let producer = Arc::new(kafka::create_producer(&kafka_brokers));
+    let producer = Arc::new(kafka::create_producer(&config.kafka_brokers));
 
     //  Add your RPC providers here
     let providers = vec![
@@ -128,7 +132,7 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!(e.to_string()))?,
     );
 
-    println!("Starting Prober with Kafka at {}...", kafka_brokers);
+    info!(kafka_brokers = %config.kafka_brokers, "Starting Prober with Kafka");
 
     loop {
         let mut handles = vec![];

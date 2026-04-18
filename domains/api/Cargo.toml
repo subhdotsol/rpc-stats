@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rpc-core = { path = "../../crates/core", package = "core" }
+rpc-core = { path = "../../crates/core" }
 actix-web = "4"
 dotenvy = "0.15"
 tokio.workspace = true

@@ -18,6 +18,10 @@ pub struct Config {
     /// Defaults to 30 seconds.
     #[serde(default = "default_probe_interval")]
     pub probe_interval_secs: u64,
+
+    /// Kafka bootstrap broker list. Defaults to `localhost:9092`.
+    #[serde(default = "default_kafka_brokers")]
+    pub kafka_brokers: String,
 }
 
 fn default_keypair_path() -> String {
@@ -26,6 +30,10 @@ fn default_keypair_path() -> String {
 
 fn default_probe_interval() -> u64 {
     30
+}
+
+fn default_kafka_brokers() -> String {
+    "localhost:9092".to_string()
 }
 
 impl Config {

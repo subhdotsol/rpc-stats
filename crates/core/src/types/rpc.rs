@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Represents a single RPC provider
@@ -22,10 +23,6 @@ pub struct SentTx {
     /// Unix timestamp in milliseconds when the transaction was submitted
     pub timestamp: u128,
 }
-
-
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TxSubmitted {
