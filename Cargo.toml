@@ -10,7 +10,12 @@ axum = { version = "0.7", features = ["macros"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["trace", "timeout", "cors"] }
 
-sqlx = { version = "0.7", features = ["postgres", "uuid", "time", "runtime-tokio"] }
+sqlx = { version = "0.7", features = [
+    "postgres",
+    "uuid",
+    "time",
+    "runtime-tokio",
+] }
 
 deadpool-redis = "0.14"
 redis = { version = "0.24", features = ["tokio-comp", "streams"] }
@@ -27,3 +32,6 @@ figment = { version = "0.10", features = ["toml", "env"] }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+
+# for seding the transaction via-prober
