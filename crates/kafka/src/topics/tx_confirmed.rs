@@ -1,15 +1,6 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use rdkafka::producer::FutureProducer;
 use crate::produce_message;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TxConfirmed {
-    pub signature: String,
-    pub provider: String,
-    pub slot: u64,
-    pub timestamp: DateTime<Utc>,
-}
+use rdkafka::producer::FutureProducer;
+use rpc_core::types::TxConfirmed;
 
 pub async fn produce_tx_confirmed(
     producer: &FutureProducer,
