@@ -1,5 +1,8 @@
 use chrono::Utc;
-use rpc_core::types::TxSubmitted;
+use rpc_core::{
+    config::Config,
+    types::rpc::{RpcProvider, SentTx, TxSubmitted},
+};
 use kafka::topics::tx_submitted::produce_tx_submitted;
 use kafka::FutureProducer;
 use serde_json::json;
@@ -18,25 +21,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::time::{sleep, Duration};
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 const MEMO_PROGRAM_ID: &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
-
-//  Replace with your funded keypair path
-const KEYPAIR_PATH: &str = "~/.config/solana/id.json";
-
-#[derive(Clone)]
-struct RpcProvider {
-    name: String,
-    url: String,
-}
-
-#[derive(Debug)]
-struct SentTx {
-    signature: String,
-    provider: String,
-    timestamp: u128,
-}
 
 fn now_ms() -> u128 {
     SystemTime::now()
@@ -74,14 +63,16 @@ async fn send_tx(
     .to_string();
 
     let memo_ix = create_memo_ix(memo_payload);
-
     let message = Message::new(&[memo_ix], Some(&payer.pubkey()));
-
     let tx = Transaction::new(&[payer.as_ref()], message, recent_blockhash);
 
     let signature = client.send_transaction(&tx)?;
 
-    println!(" Sent via {} → {}", provider.name, signature);
+    info!(
+        provider = %provider.name,
+        signature = %signature,
+        "Transaction sent"
+    );
 
     // Produce to Kafka
     let kafka_tx = TxSubmitted {
@@ -103,30 +94,45 @@ async fn send_tx(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    
     dotenvy::dotenv().ok();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
 
-    let kafka_brokers = std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:9092".to_string());
-    let producer = Arc::new(kafka::create_producer(&kafka_brokers));
+    let config = Config::from_env()?;
+
+    info!(
+        probe_interval_secs = config.probe_interval_secs,
+        "Starting Prober"
+    );
+
+    let producer = Arc::new(kafka::create_producer(&config.kafka_brokers));
 
     //  Add your RPC providers here
     let providers = vec![
         RpcProvider {
             name: "helius".to_string(),
-            url: std::env::var("HELIUS_RPC")?,
+            url: config.helius_rpc.clone(),
         },
         RpcProvider {
             name: "alchemy".to_string(),
-            url: std::env::var("ALCHEMY_RPC")?,
+            url: config.alchemy_rpc.clone(),
         },
     ];
 
-    // Load payer
+    // Load payer keypair from the configured path
     let payer = Arc::new(
-        solana_sdk::signature::read_keypair_file(shellexpand::tilde(KEYPAIR_PATH).to_string())
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        solana_sdk::signature::read_keypair_file(
+            shellexpand::tilde(&config.keypair_path).to_string(),
+        )
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?,
     );
 
-    println!("Starting Prober with Kafka at {}...", kafka_brokers);
+    info!(kafka_brokers = %config.kafka_brokers, "Starting Prober with Kafka");
 
     loop {
         let mut handles = vec![];
@@ -139,7 +145,7 @@ async fn main() -> anyhow::Result<()> {
                 match send_tx(provider.clone(), payer, producer).await {
                     Ok(sent) => Some(sent),
                     Err(e) => {
-                        eprintln!("{} failed: {:?}", provider.name, e);
+                        error!(provider = %provider.name, error = ?e, "Transaction failed");
                         None
                     }
                 }
@@ -154,8 +160,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        println!("Batch complete: {} tx sent\n", results.len());
+        info!(sent = results.len(), "Probe batch complete");
 
-        sleep(Duration::from_secs(30)).await;
+        sleep(Duration::from_secs(config.probe_interval_secs)).await;
     }
 }

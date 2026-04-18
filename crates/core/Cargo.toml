@@ -9,3 +9,5 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+figment = { workspace = true }
+tracing = { workspace = true }
