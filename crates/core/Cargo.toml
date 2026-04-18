@@ -1,10 +1,12 @@
 [package]
-name = "core"
+name = "rpc-core"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-serde = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+uuid = { workspace = true, features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 figment = { workspace = true }

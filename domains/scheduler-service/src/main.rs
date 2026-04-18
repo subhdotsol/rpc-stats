@@ -1,5 +1,6 @@
 use chrono::Utc;
-use kafka::topics::tx_submitted::{produce_tx_submitted, TxSubmitted};
+use rpc_core::types::TxSubmitted;
+use kafka::topics::tx_submitted::produce_tx_submitted;
 use kafka::FutureProducer;
 use serde_json::json;
 use solana_client::rpc_client::RpcClient;
