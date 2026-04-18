@@ -1,4 +1,4 @@
-.PHONY: all build api scheduler worker ingestion incident alert run-api run-scheduler run-worker run-ingestion run-incident run-alert test clean help
+.PHONY: all build api scheduler worker ingestion incident alert geyser run-api run-scheduler run-worker run-ingestion run-incident run-alert run-geyser test clean help
 
 # Default target: build everything
 all: build
@@ -25,6 +25,9 @@ incident:
 alert:
 	cargo build -p alert-service
 
+geyser:
+	cargo build -p geyser-consumer
+
 # Run targets for specific services
 run-api:
 	cd domains/api && cargo run
@@ -44,6 +47,9 @@ run-incident:
 run-alert:
 	cd domains/alert-service && cargo run
 
+run-geyser:
+	cd domains/geyser-consumer && cargo run
+
 # Testing and Maintenance
 test:
 	cargo test
@@ -60,6 +66,7 @@ help:
 	@echo "  make ingestion    - Build the ingestion-service"
 	@echo "  make incident     - Build the incident-service"
 	@echo "  make alert        - Build the alert-service"
+	@echo "  make geyser       - Build the geyser-consumer"
 	@echo "  make run-<name>   - Run the specific service (e.g., make run-api)"
 	@echo "  make test         - Run all tests"
 	@echo "  make clean        - Clean build artifacts"
