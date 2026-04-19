@@ -7,8 +7,19 @@ use serde::Deserialize;
 /// `KEYPAIR_PATH`). Defaults are applied for optional fields.
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
+    #[serde(default = "default_database_url")]
+    pub database_url: String,
+
+    #[serde(default = "default_api_host")]
+    pub api_host: String,
+
+    #[serde(default = "default_api_port")]
+    pub api_port: u16,
+
+    #[serde(default)]
     pub helius_rpc: String,
 
+    #[serde(default)]
     pub alchemy_rpc: String,
 
     /// Defaults to `~/.config/solana/id.json`.
@@ -22,6 +33,18 @@ pub struct Config {
     /// Kafka bootstrap broker list. Defaults to `localhost:9092`.
     #[serde(default = "default_kafka_brokers")]
     pub kafka_brokers: String,
+}
+
+fn default_database_url() -> String {
+    "postgres://user:pass@localhost:5432/rpc".to_string()
+}
+
+fn default_api_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_api_port() -> u16 {
+    8080
 }
 
 fn default_keypair_path() -> String {
