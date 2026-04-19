@@ -7,6 +7,7 @@ resolver = "2"
 tokio = { version = "1", features = ["full"] }
 
 axum = { version = "0.7", features = ["macros"] }
+actix-web = "4"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["trace", "timeout", "cors"] }
 
@@ -27,6 +28,8 @@ time = { version = "0.3", features = ["serde"] }
 
 thiserror = "1"
 anyhow = "1"
+
+rpc-core = { path = "crates/core" }
 
 figment = { version = "0.10", features = ["toml", "env"] }
 
