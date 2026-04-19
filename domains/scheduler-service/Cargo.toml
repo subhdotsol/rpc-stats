@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rpc-core = { path = "../../crates/core" }
+rpc-core = { workspace = true }
+actix-web = { workspace = true }
 anyhow.workspace = true
 dotenvy = "0.15"
 bs58 = "0.5.1"
