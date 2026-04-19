@@ -1,105 +1,18 @@
-use chrono::Utc;
+use actix_web::{web, App, HttpServer};
 use dashmap::DashMap;
-use kafka::FutureProducer;
-use kafka::topics::tx_submitted::produce_tx_submitted;
-use rpc_core::{
-    config::Config,
-    types::rpc::{RpcProvider, SentTx, TxSubmitted},
-};
-use serde_json::json;
-use solana_client::rpc_client::RpcClient;
-use solana_commitment_config::CommitmentConfig;
-use solana_sdk::{
-    instruction::Instruction,
-    message::Message,
-    pubkey::Pubkey,
-    signature::{Keypair, Signer},
-    transaction::Transaction,
-};
-use std::{
-    str::FromStr,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
-use tokio::time::{Duration, sleep};
-use tracing::{error, info};
+use rpc_core::{config::Config, types::rpc::{RpcProvider, SentTx}};
+use std::sync::Arc;
+use tokio::time::{sleep, Duration};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
-use uuid::Uuid;
 
-const MEMO_PROGRAM_ID: &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
+mod scheduler;
+mod handlers;
 
-fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis()
-}
+use crate::scheduler::{now_ms, run_batch};
+use crate::handlers::{health, run_schedule, AppState};
 
-fn create_memo_ix(data: String) -> Instruction {
-    Instruction {
-        program_id: Pubkey::from_str(MEMO_PROGRAM_ID).unwrap(),
-        accounts: vec![],
-        data: data.into_bytes(),
-    }
-}
-
-async fn send_tx(
-    provider: RpcProvider,
-    payer: Arc<Keypair>,
-    producer: Arc<FutureProducer>,
-    sent_map: Arc<DashMap<String, SentTx>>,
-) -> anyhow::Result<SentTx> {
-    let client =
-        RpcClient::new_with_commitment(provider.url.clone(), CommitmentConfig::processed());
-
-    let recent_blockhash = client.get_latest_blockhash()?;
-
-    let test_id = Uuid::new_v4().to_string();
-    let timestamp = now_ms();
-
-    let memo_payload = json!({
-        "test_id": test_id,
-        "provider": provider.name,
-        "timestamp": timestamp
-    })
-    .to_string();
-
-    let memo_ix = create_memo_ix(memo_payload);
-    let message = Message::new(&[memo_ix], Some(&payer.pubkey()));
-    let tx = Transaction::new(&[payer.as_ref()], message, recent_blockhash);
-
-    let signature = client.send_transaction(&tx)?;
-
-    info!(
-        provider = %provider.name,
-        signature = %signature,
-        "Transaction sent"
-    );
-
-    let sent_tx = SentTx {
-        signature: signature.to_string(),
-        provider: provider.name.clone(),
-        timestamp,
-    };
-
-    // Store in shared map for tracking
-    sent_map.insert(signature.to_string(), sent_tx.clone());
-
-    // Produce to Kafka
-    let kafka_tx = TxSubmitted {
-        signature: signature.to_string(),
-        provider: provider.name,
-        timestamp: Utc::now(),
-    };
-
-    if let Err(e) = produce_tx_submitted(&producer, &kafka_tx).await {
-        eprintln!("Failed to produce to Kafka: {:?}", e);
-    }
-
-    Ok(sent_tx)
-}
-
-#[tokio::main]
+#[actix_web::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt()
@@ -109,32 +22,29 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = Config::from_env()?;
+    let port = 7001;
 
     info!(
         probe_interval_secs = config.probe_interval_secs,
-        "Starting Prober"
+        port = port,
+        "Starting Scheduler Service"
     );
 
     let producer = Arc::new(kafka::create_producer(&config.kafka_brokers));
-
-    // shared dashmap
     let sent_map: Arc<DashMap<String, SentTx>> = Arc::new(DashMap::new());
 
-    // preventing memory leak
+    // Preventing memory leak
     {
         let cleanup_map = sent_map.clone();
         tokio::spawn(async move {
             loop {
                 let now = now_ms();
-
                 cleanup_map.retain(|_, tx| now - tx.timestamp < 60_000);
-
                 sleep(Duration::from_secs(10)).await;
             }
         });
     }
 
-    //  Add your RPC providers here
     let providers = vec![
         RpcProvider {
             name: "helius".to_string(),
@@ -146,7 +56,6 @@ async fn main() -> anyhow::Result<()> {
         },
     ];
 
-    // Load payer keypair from the configured path
     let payer = Arc::new(
         solana_sdk::signature::read_keypair_file(
             shellexpand::tilde(&config.keypair_path).to_string(),
@@ -154,41 +63,40 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!(e.to_string()))?,
     );
 
-    info!(kafka_brokers = %config.kafka_brokers, "Starting Prober with Kafka");
+    let app_state = Arc::new(AppState {
+        providers: providers.clone(),
+        payer: payer.clone(),
+        producer: producer.clone(),
+        sent_map: sent_map.clone(),
+    });
 
-    loop {
-        let mut handles = vec![];
+    // Background scheduler loop (every 30 seconds as requested)
+    {
+        let providers = providers.clone();
+        let payer = payer.clone();
+        let producer = producer.clone();
+        let sent_map = sent_map.clone();
 
-        for provider in providers.clone() {
-            let payer = payer.clone();
-            let producer = producer.clone();
-            let sent_map = sent_map.clone();
-
-            handles.push(tokio::spawn(async move {
-                match send_tx(provider.clone(), payer, producer, sent_map).await {
-                    Ok(sent) => Some(sent),
-                    Err(e) => {
-                        error!(provider = %provider.name, error = ?e, "Transaction failed");
-                        None
-                    }
-                }
-            }));
-        }
-
-        let mut results = vec![];
-
-        for h in handles {
-            if let Ok(Some(res)) = h.await {
-                results.push(res);
+        tokio::spawn(async move {
+            loop {
+                info!("Scheduled probe run starting...");
+                run_batch(providers.clone(), payer.clone(), producer.clone(), sent_map.clone()).await;
+                sleep(Duration::from_secs(30)).await;
             }
-        }
-
-        info!(
-            sent = results.len(),
-            tracked = sent_map.len(),
-            "Probe batch complete"
-        );
-
-        sleep(Duration::from_secs(config.probe_interval_secs)).await;
+        });
     }
+
+    info!("Starting Actix server on port {}", port);
+    
+    HttpServer::new(move || {
+        App::new()
+            .app_data(web::Data::new(app_state.clone()))
+            .service(health)
+            .service(run_schedule)
+    })
+    .bind(("0.0.0.0", port))?
+    .run()
+    .await?;
+
+    Ok(())
 }

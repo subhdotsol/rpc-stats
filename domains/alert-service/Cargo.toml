@@ -5,3 +5,7 @@ edition = "2024"
 
 [dependencies]
 tokio = { workspace = true }
+actix-web = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rpc-core = { workspace = true }
