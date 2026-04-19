@@ -4,7 +4,7 @@ use kafka::FutureProducer;
 use kafka::topics::tx_submitted::produce_tx_submitted;
 use rpc_core::types::rpc::{RpcProvider, SentTx, TxSubmitted};
 use serde_json::json;
-use solana_client::rpc_client::RpcClient;
+use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_commitment_config::CommitmentConfig;
 use solana_sdk::{
     instruction::Instruction,
@@ -47,7 +47,7 @@ pub async fn send_tx(
     let client =
         RpcClient::new_with_commitment(provider.url.clone(), CommitmentConfig::processed());
 
-    let recent_blockhash = client.get_latest_blockhash()?;
+    let recent_blockhash = client.get_latest_blockhash().await?;
 
     let test_id = Uuid::new_v4().to_string();
     let timestamp = now_ms();
@@ -63,7 +63,7 @@ pub async fn send_tx(
     let message = Message::new(&[memo_ix], Some(&payer.pubkey()));
     let tx = Transaction::new(&[payer.as_ref()], message, recent_blockhash);
 
-    let signature = client.send_transaction(&tx)?;
+    let signature = client.send_transaction(&tx).await?;
 
     info!(
         provider = %provider.name,
