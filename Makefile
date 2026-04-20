@@ -54,6 +54,9 @@ run-geyser:
 test:
 	cargo test
 
+test-api:
+	cargo test -p api
+
 clean:
 	cargo clean
 
@@ -69,4 +72,5 @@ help:
 	@echo "  make geyser       - Build the geyser-consumer"
 	@echo "  make run-<name>   - Run the specific service (e.g., make run-api)"
 	@echo "  make test         - Run all tests"
+	@echo "  make test-api     - Run api tests"
 	@echo "  make clean        - Clean build artifacts"

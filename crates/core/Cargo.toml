@@ -11,3 +11,4 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 figment = { workspace = true }
 tracing = { workspace = true }
+sqlx = { workspace = true }
