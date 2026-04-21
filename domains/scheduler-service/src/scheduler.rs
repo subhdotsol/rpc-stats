@@ -83,13 +83,19 @@ pub async fn send_tx(
     // Produce to Kafka
     let kafka_tx = TxSubmitted {
         signature: signature.to_string(),
-        provider: provider.name,
-        timestamp: Utc::now(),
+        provider_id: provider.name,
+        region_id: "global".to_string(),   // TODO: pass through from config
+        fee_tier_id: "low".to_string(),    // TODO: pass through from config
+        submitted_at: Utc::now(),
+        submitted_slot: None,              // TODO: capture from getSlot() call
+        network_tps: None,                 // TODO: snapshot from network_conditions
+        batch_id: Uuid::new_v4().to_string(),
     };
 
     if let Err(e) = produce_tx_submitted(&producer, &kafka_tx).await {
         eprintln!("Failed to produce to Kafka: {:?}", e);
     }
+
 
     Ok(sent_tx)
 }

@@ -7,6 +7,9 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
 use base64::{engine::general_purpose::STANDARD, Engine};
+use chrono::Utc;
+use kafka::topics::tx_landed::produce_tx_landed;
+use rpc_core::types::TxLanded;
 
 pub mod geyser {
     tonic::include_proto!("geyser");
@@ -38,10 +41,17 @@ async fn main() -> Result<()> {
 
     info!("Connecting to Helius Devnet Geyser at {}...", endpoint);
 
+    // Initialize Kafka producer
+    let config = rpc_core::config::Config::from_env().expect("Failed to load config");
+    let producer = std::sync::Arc::new(
+        kafka::create_producer(&config.kafka_brokers)
+    );
+
     let channel = Channel::from_shared(endpoint.to_string())?
         .tls_config(ClientTlsConfig::new())?
         .connect()
         .await?;
+
 
     let token_val = if !token.is_empty() {
         Some(MetadataValue::from_str(&token)?)
@@ -143,6 +153,18 @@ async fn main() -> Result<()> {
                                                     latency_ms = latency,
                                                     "🔥 Matched test tx"
                                                 );
+
+                                                // Publish to Kafka for downstream ingestion
+                                                let kafka_tx = TxLanded {
+                                                    signature: signature.clone(),
+                                                    provider_id: provider.to_string(),
+                                                    landed_slot: tx_update.slot as i64,
+                                                    geyser_landed_at: Utc::now(),
+                                                };
+
+                                                if let Err(e) = produce_tx_landed(&producer, &kafka_tx).await {
+                                                    error!(sig = %signature, "Failed to publish tx.landed to Kafka: {:?}", e);
+                                                }
                                             }
                                         }
                                     }
@@ -151,6 +173,7 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+
                 geyser::subscribe_update::UpdateOneof::Ping(_) => {
                     info!("Ping received");
                 }

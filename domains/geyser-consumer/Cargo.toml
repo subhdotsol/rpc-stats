@@ -16,8 +16,12 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 base64 = "0.21"
 bs58 = "0.5"
-chrono = "0.4"
 dashmap = "5"
+kafka = { path = "../../crates/kafka" }
+rpc-core = { path = "../../crates/core" }
+chrono = { workspace = true }
+
+
 
 [build-dependencies]
 tonic-build = "0.11"
