@@ -26,6 +26,12 @@ async fn get_leaderboard(
         ));
     }
 
+    // 1. Try Redis first (hot path)
+    if let Some(rows) = rpc_cache::get_json::<Vec<LeaderboardRow>>(&state.redis, rpc_cache::keys::LEADERBOARD_CURRENT).await {
+        return Ok(HttpResponse::Ok().json(map_leaderboard_response(window, rows)));
+    }
+
+    // 2. Fallback to DB
     let rows = sqlx::query_as::<_, LeaderboardRow>(
         r#"
         SELECT
@@ -46,6 +52,18 @@ async fn get_leaderboard(
     .fetch_all(&state.db)
     .await?;
 
+    // 3. Optional: Write-back to Redis if cold (though cron usually handles this)
+    let _ = rpc_cache::set_json_ex(
+        &state.redis,
+        rpc_cache::keys::LEADERBOARD_CURRENT,
+        &rows,
+        rpc_cache::keys::LEADERBOARD_CURRENT_TTL
+    ).await;
+
+    Ok(HttpResponse::Ok().json(map_leaderboard_response(window, rows)))
+}
+
+fn map_leaderboard_response(window: String, rows: Vec<LeaderboardRow>) -> LeaderboardResponse {
     let entries: Vec<LeaderboardEntry> = rows
         .into_iter()
         .map(|r| LeaderboardEntry {
@@ -53,19 +71,18 @@ async fn get_leaderboard(
             success_rate: r.landing_rate.unwrap_or(0.0),
             avg_latency_ms: r.avg_confirm_ms.unwrap_or(0),
             avg_block_lag: r.avg_slot_lag.unwrap_or(0.0),
-            total_requests: 0, // Placeholder
-            failed_requests: 0, // Placeholder
+            total_requests: 0,
+            failed_requests: 0,
         })
         .collect();
 
-    let response = LeaderboardResponse {
+    LeaderboardResponse {
         window,
         data: entries,
         generated_at: Utc::now(),
-    };
-
-    Ok(HttpResponse::Ok().json(response))
+    }
 }
+
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(get_leaderboard);

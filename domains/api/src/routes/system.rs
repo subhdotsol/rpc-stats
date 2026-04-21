@@ -86,6 +86,50 @@ async fn get_summary(state: web::Data<AppState>) -> Result<HttpResponse, ApiErro
     }))
 }
 
-pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.service(get_summary);
+#[derive(Serialize, Deserialize, sqlx::FromRow)]
+struct NetworkConditionRow {
+    pub time: chrono::DateTime<chrono::Utc>,
+    pub current_tps: i32,
+    pub current_slot: i64,
+    pub congestion_level: String,
 }
+
+#[get("/network/current")]
+async fn get_network_current(state: web::Data<AppState>) -> Result<HttpResponse, ApiError> {
+    let key = rpc_cache::keys::NETWORK_CURRENT;
+
+    // 1. Try Redis
+    if let Some(data) = rpc_cache::get_json::<NetworkConditionRow>(&state.redis, key).await {
+        return Ok(HttpResponse::Ok().json(data));
+    }
+
+    // 2. Fallback to DB
+    let row = sqlx::query_as::<_, NetworkConditionRow>(
+        r#"
+        SELECT time, current_tps, current_slot, congestion_level
+        FROM network_conditions
+        ORDER BY time DESC
+        LIMIT 1
+        "#
+    )
+    .fetch_optional(&state.db)
+    .await?;
+
+    if let Some(r) = row {
+        // 3. Write-back
+        let _ = rpc_cache::set_json_ex(
+            &state.redis,
+            key,
+            &r,
+            rpc_cache::keys::NETWORK_CURRENT_TTL
+        ).await;
+        Ok(HttpResponse::Ok().json(r))
+    } else {
+        Err(ApiError::NotFound("no network conditions recorded yet".to_string()))
+    }
+}
+
+pub fn config(cfg: &mut web::ServiceConfig) {
+    cfg.service(get_summary).service(get_network_current);
+}
+

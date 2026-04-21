@@ -52,7 +52,7 @@ pub async fn snapshot_rankings(pool: &PgPool) -> Result<()> {
               ROUND(avg_confirm_ms)::INT,
               ROUND(avg_slot_lag, 2)
             FROM metrics
-            ON CONFLICT (period, provider_id, DATE(snapshot_at)) DO NOTHING
+            ON CONFLICT (period, provider_id, snapshot_date) DO NOTHING
             "#,
         )
         .bind(period_label)

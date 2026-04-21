@@ -15,6 +15,7 @@ pub async fn setup_app_state() -> AppState {
         keypair_path: "~/.config/solana/id.json".to_string(),
         probe_interval_secs: 30,
         kafka_brokers: "localhost:9092".to_string(),
+        redis_url: "redis://localhost:6379".to_string(),
     });
     // We attempt to connect; if it fails in CI/CD without DB, we might panic.
     // For a real setup, we would use Testcontainers or conditional execution.
@@ -24,5 +25,9 @@ pub async fn setup_app_state() -> AppState {
         .await
         .expect("Test DB connection failed. Ensure docker-compose is running.");
         
-    AppState { db: pool }
+    let redis_pool = rpc_cache::create_pool(&config.redis_url)
+        .expect("Test Redis connection failed. Ensure docker-compose is running.");
+        
+    AppState { db: pool, redis: redis_pool }
 }
+

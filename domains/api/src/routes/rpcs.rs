@@ -108,6 +108,17 @@ async fn get_rpc_timeseries(
     let provider_id = path.into_inner();
     let window = query.window.clone().unwrap_or_else(|| "1h".to_string());
 
+    // 1. Try Redis for hot windows (24h)
+    if window == "24h" {
+        let key = rpc_cache::keys::provider_trend_24h(&provider_id);
+        if let Some(points) = rpc_cache::get_json::<Vec<TimeseriesPoint>>(&state.redis, &key).await {
+            return Ok(HttpResponse::Ok().json(TimeseriesResponse {
+                rpc_id: provider_id,
+                points,
+            }));
+        }
+    }
+
     let (interval_sql, bucket_pg, table) = match window.as_str() {
         "1h" => ("1 hour", "5 minutes", "provider_metrics_5m"),
         "6h" => ("6 hours", "5 minutes", "provider_metrics_5m"),
@@ -155,11 +166,23 @@ async fn get_rpc_timeseries(
         })
         .collect();
 
+    // 2. Write-back for 24h window
+    if window == "24h" {
+        let key = rpc_cache::keys::provider_trend_24h(&provider_id);
+        let _ = rpc_cache::set_json_ex(
+            &state.redis,
+            &key,
+            &points,
+            rpc_cache::keys::PROVIDER_TREND_24H_TTL
+        ).await;
+    }
+
     Ok(HttpResponse::Ok().json(TimeseriesResponse {
         rpc_id: provider_id,
         points,
     }))
 }
+
 
 #[get("/{id}/fee-breakdown")]
 async fn get_fee_breakdown(
@@ -167,6 +190,14 @@ async fn get_fee_breakdown(
     path: web::Path<String>,
 ) -> Result<HttpResponse, ApiError> {
     let provider_id = path.into_inner();
+    let key = rpc_cache::keys::provider_fee_breakdown(&provider_id);
+
+    // 1. Try Redis
+    if let Some(data) = rpc_cache::get_json::<Vec<FeeBreakdownRow>>(&state.redis, &key).await {
+        return Ok(HttpResponse::Ok().json(ApiResponse { data }));
+    }
+
+    // 2. Fallback to DB
     let rows = sqlx::query_as::<_, FeeBreakdownRow>(
         r#"
         SELECT
@@ -188,9 +219,17 @@ async fn get_fee_breakdown(
         ORDER BY ft.sort_order ASC
         "#
     )
-    .bind(provider_id)
+    .bind(&provider_id)
     .fetch_all(&state.db)
     .await?;
+
+    // 3. Write-back
+    let _ = rpc_cache::set_json_ex(
+        &state.redis,
+        &key,
+        &rows,
+        rpc_cache::keys::PROVIDER_FEE_BREAKDOWN_TTL
+    ).await;
 
     Ok(HttpResponse::Ok().json(ApiResponse { data: rows }))
 }
@@ -201,6 +240,14 @@ async fn get_region_latency(
     path: web::Path<String>,
 ) -> Result<HttpResponse, ApiError> {
     let provider_id = path.into_inner();
+    let key = rpc_cache::keys::provider_region_latency(&provider_id);
+
+    // 1. Try Redis
+    if let Some(data) = rpc_cache::get_json::<Vec<RegionLatencyRow>>(&state.redis, &key).await {
+        return Ok(HttpResponse::Ok().json(ApiResponse { data }));
+    }
+
+    // 2. Fallback to DB
     let rows = sqlx::query_as::<_, RegionLatencyRow>(
         r#"
         SELECT
@@ -221,12 +268,21 @@ async fn get_region_latency(
         ORDER BY m.avg_confirm_ms ASC NULLS LAST
         "#
     )
-    .bind(provider_id)
+    .bind(&provider_id)
     .fetch_all(&state.db)
     .await?;
 
+    // 3. Write-back
+    let _ = rpc_cache::set_json_ex(
+        &state.redis,
+        &key,
+        &rows,
+        rpc_cache::keys::PROVIDER_REGION_LATENCY_TTL
+    ).await;
+
     Ok(HttpResponse::Ok().json(ApiResponse { data: rows }))
 }
+
 
 #[get("/{id}/latest-tests")]
 async fn get_latest_tests(

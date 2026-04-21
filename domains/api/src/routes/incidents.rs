@@ -29,8 +29,26 @@ async fn get_incidents(
 
     let interval = format!("{} days", days);
 
-    // Using query builder approach or raw sql. Since we have dynamic filters like rpc_id,
-    // we can use standard query_as with COALESCE to ignore them if null.
+    // 1. Try Redis first for the simple "active incidents" case
+    if active == Some(true) && rpc_id.is_none() {
+        if let Some(incidents) = rpc_cache::get_json::<Vec<IncidentRow>>(&state.redis, rpc_cache::keys::INCIDENTS_ACTIVE).await {
+            let data: Vec<IncidentItem> = incidents
+                .into_iter()
+                .map(|r| IncidentItem {
+                    id: r.id.to_string(),
+                    rpc_id: r.provider_id,
+                    region: None,
+                    reason: r.incident_type,
+                    started_at: r.started_at,
+                    resolved_at: r.resolved_at,
+                    duration_ms: r.duration_seconds.map(|ds| ds * 1000),
+                })
+                .collect();
+            return Ok(HttpResponse::Ok().json(ApiResponse { data }));
+        }
+    }
+
+    // 2. Fallback to DB (handles filtered or inactive queries)
     let rows = sqlx::query_as::<_, IncidentRow>(
         r#"
         SELECT
@@ -56,6 +74,7 @@ async fn get_incidents(
     .await?;
 
     let data: Vec<IncidentItem> = rows
+
         .into_iter()
         .map(|r| IncidentItem {
             id: r.id.to_string(),
