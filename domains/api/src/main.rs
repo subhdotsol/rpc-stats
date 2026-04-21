@@ -32,14 +32,13 @@ async fn main() -> std::io::Result<()> {
         redis: redis.clone(),
     };
 
-    // ── Background cron jobs ──────────────────────────────────────────────────
+    // Background cron jobs
     // Refresh leaderboard_current every 30 seconds
     spawn_refresh_leaderboard(pool.clone(), redis.clone(), 30);
     // Detect new incidents every 60 seconds
     spawn_detect_incidents(pool.clone(), redis.clone(), 60);
     // Snapshot historical rankings every hour
     spawn_snapshot_rankings(pool.clone(), 3_600);
-    // ─────────────────────────────────────────────────────────────────────────
 
     info!(
         "Starting Actix RPC Stats server at http://{}:{} (Redis: {})",

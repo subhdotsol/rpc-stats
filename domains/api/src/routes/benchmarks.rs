@@ -18,6 +18,14 @@ async fn get_rpc_methods(
 ) -> Result<HttpResponse, ApiError> {
     let method_type = query.rpc_type.clone();
 
+    // 1. Try Redis for global unfiltered view
+    if method_type.is_none() {
+        if let Some(data) = rpc_cache::get_json::<Vec<RpcMethodRow>>(&state.redis, rpc_cache::keys::BENCHMARKS_RPC_METHODS).await {
+            return Ok(HttpResponse::Ok().json(ApiResponse { data }));
+        }
+    }
+
+    // 2. Fallback to DB
     let rows = sqlx::query_as::<_, RpcMethodRow>(
         r#"
         SELECT
@@ -35,9 +43,19 @@ async fn get_rpc_methods(
         ORDER BY method_name, provider_id
         "#
     )
-    .bind(method_type)
+    .bind(method_type.clone())
     .fetch_all(&state.db)
     .await?;
+
+    // 3. Write-back if unfiltered
+    if method_type.is_none() {
+        let _ = rpc_cache::set_json_ex(
+            &state.redis,
+            rpc_cache::keys::BENCHMARKS_RPC_METHODS,
+            &rows,
+            rpc_cache::keys::BENCHMARKS_RPC_METHODS_TTL
+        ).await;
+    }
 
     Ok(HttpResponse::Ok().json(ApiResponse { data: rows }))
 }
@@ -97,6 +115,14 @@ async fn get_test_runs(
 ) -> Result<HttpResponse, ApiError> {
     let limit = query.limit.unwrap_or(20);
 
+    // 1. Try Redis for default limit
+    if limit == 20 {
+        if let Some(data) = rpc_cache::get_json::<Vec<TestRunRow>>(&state.redis, rpc_cache::keys::TEST_RUNS_LATEST).await {
+            return Ok(HttpResponse::Ok().json(ApiResponse { data }));
+        }
+    }
+
+    // 2. Fallback to DB
     let rows = sqlx::query_as::<_, TestRunRow>(
         r#"
         SELECT
@@ -123,8 +149,19 @@ async fn get_test_runs(
     .fetch_all(&state.db)
     .await?;
 
+    // 3. Write-back for default limit
+    if limit == 20 {
+        let _ = rpc_cache::set_json_ex(
+            &state.redis,
+            rpc_cache::keys::TEST_RUNS_LATEST,
+            &rows,
+            rpc_cache::keys::TEST_RUNS_LATEST_TTL
+        ).await;
+    }
+
     Ok(HttpResponse::Ok().json(ApiResponse { data: rows }))
 }
+
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(get_rpc_methods)
