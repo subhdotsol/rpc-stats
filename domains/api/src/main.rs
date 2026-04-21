@@ -6,6 +6,7 @@ use sqlx::postgres::PgPoolOptions;
 use rpc_core::config::Config;
 use api::app_state::AppState;
 use api::routes;
+use api::cron::{spawn_detect_incidents, spawn_refresh_leaderboard, spawn_snapshot_rankings};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -23,7 +24,16 @@ async fn main() -> std::io::Result<()> {
         .await
         .expect("Failed to connect to Postgres");
 
-    let state = AppState { db: pool };
+    let state = AppState { db: pool.clone() };
+
+    // ── Background cron jobs ──────────────────────────────────────────────────
+    // Refresh leaderboard_current every 30 seconds
+    spawn_refresh_leaderboard(pool.clone(), 30);
+    // Detect new incidents every 60 seconds
+    spawn_detect_incidents(pool.clone(), 60);
+    // Snapshot historical rankings every hour
+    spawn_snapshot_rankings(pool.clone(), 3_600);
+    // ─────────────────────────────────────────────────────────────────────────
 
     info!(
         "Starting Actix RPC Stats server at http://{}:{}",

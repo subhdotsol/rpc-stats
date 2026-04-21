@@ -1,0 +1,95 @@
+use anyhow::Result;
+use sqlx::PgPool;
+use tracing::{error, info};
+
+#[derive(sqlx::FromRow)]
+struct BreachRow {
+    provider_id: String,
+    incident_type: Option<String>,
+    trigger_metric: Option<String>,
+    trigger_value: Option<f64>,
+}
+
+/// Detect providers that are breaching quality thresholds in the last ~5 min,
+/// and open a new incident row for each unresolved (provider, type) pair.
+pub async fn detect_incidents(pool: &PgPool) -> Result<()> {
+    // Find providers breaching thresholds in the last 5 minutes
+    let breaches: Vec<BreachRow> = sqlx::query_as(
+        r#"
+        SELECT
+          provider_id,
+          CASE
+            WHEN landing_rate < 0.80   THEN 'outage'
+            WHEN landing_rate < 0.92   THEN 'degraded'
+            WHEN p95_latency_ms > 2000 THEN 'degraded'
+          END AS incident_type,
+          CASE
+            WHEN landing_rate < 0.80   THEN 'landing_rate'
+            WHEN landing_rate < 0.92   THEN 'landing_rate'
+            WHEN p95_latency_ms > 2000 THEN 'p95_latency'
+          END AS trigger_metric,
+          CASE
+            WHEN landing_rate < 0.80   THEN landing_rate
+            WHEN landing_rate < 0.92   THEN landing_rate
+            WHEN p95_latency_ms > 2000 THEN p95_latency_ms::DECIMAL
+          END AS trigger_value
+        FROM provider_metrics_5m
+        WHERE time >= NOW() - INTERVAL '6 minutes'
+          AND time = (
+            SELECT MAX(time) FROM provider_metrics_5m pm2
+            WHERE pm2.provider_id  = provider_metrics_5m.provider_id
+              AND pm2.region_id    IS NULL
+              AND pm2.fee_tier_id  IS NULL
+          )
+          AND region_id   IS NULL
+          AND fee_tier_id IS NULL
+          AND (
+            landing_rate   < 0.92
+            OR p95_latency_ms > 2000
+          )
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let count = breaches.len();
+
+    for breach in breaches {
+        // Only insert if no active incident of the same type already exists for this provider
+        sqlx::query(
+            r#"
+            INSERT INTO incidents (provider_id, incident_type, started_at, trigger_metric, trigger_value, description)
+            SELECT $1, $2, NOW(), $3, $4,
+              FORMAT('Auto-detected: %s = %s', $3, $4::TEXT)
+            WHERE NOT EXISTS (
+              SELECT 1 FROM incidents
+              WHERE provider_id    = $1
+                AND is_resolved    = FALSE
+                AND incident_type  = $2
+            )
+            "#,
+        )
+        .bind(&breach.provider_id)
+        .bind(&breach.incident_type)
+        .bind(&breach.trigger_metric)
+        .bind(&breach.trigger_value)
+        .execute(pool)
+        .await?;
+    }
+
+    info!("detect_incidents: checked {count} breaches");
+    Ok(())
+}
+
+/// Spawn a background task that runs incident detection every `interval_secs`.
+pub fn spawn_detect_incidents(pool: PgPool, interval_secs: u64) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
+        loop {
+            ticker.tick().await;
+            if let Err(e) = detect_incidents(&pool).await {
+                error!("detect_incidents failed: {e:#}");
+            }
+        }
+    });
+}
