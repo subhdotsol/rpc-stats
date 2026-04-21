@@ -33,6 +33,10 @@ pub struct Config {
     /// Kafka bootstrap broker list. Defaults to `localhost:9092`.
     #[serde(default = "default_kafka_brokers")]
     pub kafka_brokers: String,
+
+    /// Redis connection URL. Defaults to `redis://127.0.0.1:6379`.
+    #[serde(default = "default_redis_url")]
+    pub redis_url: String,
 }
 
 fn default_database_url() -> String {
@@ -57,6 +61,10 @@ fn default_probe_interval() -> u64 {
 
 fn default_kafka_brokers() -> String {
     "localhost:9092".to_string()
+}
+
+fn default_redis_url() -> String {
+    "redis://127.0.0.1:6379".to_string()
 }
 
 impl Config {
