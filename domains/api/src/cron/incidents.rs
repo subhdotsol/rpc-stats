@@ -1,4 +1,6 @@
 use anyhow::Result;
+use rpc_cache::{keys, set_json_ex, RedisPool};
+use rpc_core::types::db_models::IncidentRow;
 use sqlx::PgPool;
 use tracing::{error, info};
 
@@ -12,8 +14,8 @@ struct BreachRow {
 
 /// Detect providers that are breaching quality thresholds in the last ~5 min,
 /// and open a new incident row for each unresolved (provider, type) pair.
-pub async fn detect_incidents(pool: &PgPool) -> Result<()> {
-    // Find providers breaching thresholds in the last 5 minutes
+pub async fn detect_incidents(pool: &PgPool, redis: &RedisPool) -> Result<()> {
+    // 1. Find providers breaching thresholds in the last 5 minutes
     let breaches: Vec<BreachRow> = sqlx::query_as(
         r#"
         SELECT
@@ -77,19 +79,35 @@ pub async fn detect_incidents(pool: &PgPool) -> Result<()> {
         .await?;
     }
 
-    info!("detect_incidents: checked {count} breaches");
+    // 2. Query active incidents and push to hot read path (Redis)
+    let active_incidents = sqlx::query_as::<_, IncidentRow>(
+        "SELECT * FROM incidents WHERE is_resolved = FALSE ORDER BY started_at DESC"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    set_json_ex(
+        redis,
+        keys::INCIDENTS_ACTIVE,
+        &active_incidents,
+        keys::INCIDENTS_ACTIVE_TTL,
+    )
+    .await?;
+
+    info!("detect_incidents: checked {count} breaches, synced active incidents to Redis");
     Ok(())
 }
 
 /// Spawn a background task that runs incident detection every `interval_secs`.
-pub fn spawn_detect_incidents(pool: PgPool, interval_secs: u64) {
+pub fn spawn_detect_incidents(pool: PgPool, redis: RedisPool, interval_secs: u64) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
         loop {
             ticker.tick().await;
-            if let Err(e) = detect_incidents(&pool).await {
+            if let Err(e) = detect_incidents(&pool, &redis).await {
                 error!("detect_incidents failed: {e:#}");
             }
         }
     });
 }
+

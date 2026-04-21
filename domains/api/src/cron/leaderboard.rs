@@ -1,4 +1,6 @@
 use anyhow::Result;
+use rpc_cache::{keys, set_json_ex, RedisPool};
+use rpc_core::types::db_models::LeaderboardRow;
 use sqlx::PgPool;
 use tracing::{error, info};
 
@@ -6,7 +8,8 @@ use tracing::{error, info};
 ///   landing_rate * 0.50
 ///   (1.0 / avg_confirm_ms) * 30000 * 0.30   (normalise ms into 0-1 range roughly)
 ///   (1.0 / avg_slot_lag)   * 5    * 0.20
-pub async fn refresh_leaderboard(pool: &PgPool) -> Result<()> {
+pub async fn refresh_leaderboard(pool: &PgPool, redis: &RedisPool) -> Result<()> {
+    // 1. Update the durable source of truth (Postgres)
     sqlx::query(
         r#"
         WITH latest AS (
@@ -97,19 +100,35 @@ pub async fn refresh_leaderboard(pool: &PgPool) -> Result<()> {
     .execute(pool)
     .await?;
 
-    info!("refresh_leaderboard: leaderboard_current updated");
+    // 2. Query back the state to push to the hot read path (Redis)
+    let rows = sqlx::query_as::<_, LeaderboardRow>(
+        "SELECT * FROM leaderboard_current ORDER BY rank ASC"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    set_json_ex(
+        redis,
+        keys::LEADERBOARD_CURRENT,
+        &rows,
+        keys::LEADERBOARD_CURRENT_TTL,
+    )
+    .await?;
+
+    info!("refresh_leaderboard: DB updated and synced to Redis ({} rows)", rows.len());
     Ok(())
 }
 
 /// Spawn a background task that refreshes the leaderboard every `interval_secs`.
-pub fn spawn_refresh_leaderboard(pool: PgPool, interval_secs: u64) {
+pub fn spawn_refresh_leaderboard(pool: PgPool, redis: RedisPool, interval_secs: u64) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
         loop {
             ticker.tick().await;
-            if let Err(e) = refresh_leaderboard(&pool).await {
+            if let Err(e) = refresh_leaderboard(&pool, &redis).await {
                 error!("refresh_leaderboard failed: {e:#}");
             }
         }
     });
 }
+
