@@ -24,21 +24,28 @@ async fn main() -> std::io::Result<()> {
         .await
         .expect("Failed to connect to Postgres");
 
-    let state = AppState { db: pool.clone() };
+    let redis = rpc_cache::create_pool(&config.redis_url)
+        .expect("Failed to create Redis pool");
+
+    let state = AppState {
+        db: pool.clone(),
+        redis: redis.clone(),
+    };
 
     // ── Background cron jobs ──────────────────────────────────────────────────
     // Refresh leaderboard_current every 30 seconds
-    spawn_refresh_leaderboard(pool.clone(), 30);
+    spawn_refresh_leaderboard(pool.clone(), redis.clone(), 30);
     // Detect new incidents every 60 seconds
-    spawn_detect_incidents(pool.clone(), 60);
+    spawn_detect_incidents(pool.clone(), redis.clone(), 60);
     // Snapshot historical rankings every hour
     spawn_snapshot_rankings(pool.clone(), 3_600);
     // ─────────────────────────────────────────────────────────────────────────
 
     info!(
-        "Starting Actix RPC Stats server at http://{}:{}",
-        config.api_host, config.api_port
+        "Starting Actix RPC Stats server at http://{}:{} (Redis: {})",
+        config.api_host, config.api_port, config.redis_url
     );
+
 
     HttpServer::new(move || {
         App::new()
