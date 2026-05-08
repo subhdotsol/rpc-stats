@@ -1,45 +1,36 @@
 use anyhow::Result;
-use tokio_stream::StreamExt;
-use tonic::transport::{Channel, ClientTlsConfig};
-use tonic::metadata::MetadataValue;
-use tracing::{error, info, warn};
-use serde_json::Value;
-use std::collections::HashMap;
-use std::str::FromStr;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::Utc;
 use kafka::topics::tx_landed::produce_tx_landed;
 use rpc_core::types::TxLanded;
-
-pub mod geyser {
-    tonic::include_proto!("geyser");
-}
-
-pub mod solana {
-    pub mod storage {
-        pub mod confirmed_block {
-            tonic::include_proto!("solana.storage.confirmed_block");
-        }
-    }
-}
-
-use geyser::geyser_client::GeyserClient;
-use geyser::{
-    SubscribeRequest, SubscribeRequestFilterTransactions, CommitmentLevel, 
-    SubscribeRequestFilterSlots, SubscribeUpdate
+use serde_json::Value;
+use std::collections::HashMap;
+use tokio_stream::StreamExt;
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
+use tonic::transport::ClientTlsConfig;
+use yellowstone_grpc_client::GeyserGrpcClient;
+use yellowstone_grpc_proto::geyser::{
+    subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
+    SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
 
-    // Helius Devnet Geyser (LaserStream)
-    let endpoint = "https://laserstream-devnet-ewr.helius-rpc.com:443";
-    let token = std::env::var("X_TOKEN").unwrap_or_else(|_| "".to_string());
+    let endpoint = std::env::var("GRPC_ENDPOINT")
+        .unwrap_or_else(|_| "https://aequa-solanad-d5c3.devnet.rpcpool.com".to_string());
+    let token = std::env::var("X_TOKEN").ok();
     let memo_program_id = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
 
-    info!("Connecting to Helius Devnet Geyser at {}...", endpoint);
+    info!("Connecting to Yellowstone gRPC at {}...", endpoint);
+    info!("Token present: {}", token.is_some());
 
     // Initialize Kafka producer
     let config = rpc_core::config::Config::from_env().expect("Failed to load config");
@@ -47,63 +38,64 @@ async fn main() -> Result<()> {
         kafka::create_producer(&config.kafka_brokers)
     );
 
-    let channel = Channel::from_shared(endpoint.to_string())?
-        .tls_config(ClientTlsConfig::new())?
+    let mut client = GeyserGrpcClient::build_from_shared(endpoint)?
+        .x_token(token)?
+        .tls_config(ClientTlsConfig::new().with_native_roots())?
         .connect()
         .await?;
 
+    info!("Connected! Setting up subscription...");
 
-    let token_val = if !token.is_empty() {
-        Some(MetadataValue::from_str(&token)?)
-    } else {
-        warn!("No X_TOKEN found in environment. Helius will reject the connection.");
-        None
-    };
+    let payer_pubkey = std::env::var("PAYER_PUBKEY")
+        .unwrap_or_else(|_| "5GHnVhqZ6Yn8mQmM43CwMRTNWZofeyExMkP6PDGCAc9d".to_string());
 
-    let mut client = GeyserClient::with_interceptor(channel, move |mut req: tonic::Request<()>| {
-        if let Some(t) = &token_val {
-            req.metadata_mut().insert("x-token", t.clone());
-        }
-        Ok(req)
-    });
+    info!("Filtering for payer: {}", payer_pubkey);
 
     let mut transactions = HashMap::new();
-    transactions.insert("client".to_string(), SubscribeRequestFilterTransactions {
-        vote: Some(false),
-        failed: Some(false),
-        signature: None,
-        account_include: vec![memo_program_id.to_string()],
-        account_exclude: vec![],
-        account_required: vec![],
-    });
+    transactions.insert(
+        "memo_txs".to_string(),
+        SubscribeRequestFilterTransactions {
+            vote: Some(false),
+            failed: Some(false),
+            signature: None,
+            account_include: vec![],
+            account_exclude: vec![],
+            account_required: vec![
+                memo_program_id.to_string(),
+                payer_pubkey,
+            ],
+        },
+    );
 
     let mut slots = HashMap::new();
-    slots.insert("client".to_string(), SubscribeRequestFilterSlots {
-        filter_by_commitment: Some(true),
-        interslot_updates: Some(false),
-    });
+    slots.insert(
+        "slot_updates".to_string(),
+        SubscribeRequestFilterSlots {
+            filter_by_commitment: Some(true),
+            interslot_updates: Some(false),
+        },
+    );
 
-    let request = SubscribeRequest {
-        accounts: HashMap::new(),
-        slots,
-        transactions,
-        transactions_status: HashMap::new(),
-        blocks: HashMap::new(),
-        blocks_meta: HashMap::new(),
-        entry: HashMap::new(),
-        commitment: Some(CommitmentLevel::Processed as i32),
-        accounts_data_slice: vec![],
-        ping: None,
-        from_slot: None,
-    };
+    let (_subscribe, mut stream) = client
+        .subscribe_with_request(Some(SubscribeRequest {
+            accounts: HashMap::new(),
+            slots,
+            transactions,
+            transactions_status: HashMap::new(),
+            blocks: HashMap::new(),
+            blocks_meta: HashMap::new(),
+            entry: HashMap::new(),
+            commitment: Some(CommitmentLevel::Processed as i32),
+            accounts_data_slice: vec![],
+            ping: None,
+            from_slot: None,
+        }))
+        .await?;
 
-    let request_stream = tokio_stream::iter(vec![request]);
-    let mut stream = client.subscribe(request_stream).await?.into_inner();
-
-    info!("Subscribed! Waiting for Devnet data...");
+    info!("Subscribed! Waiting for devnet transactions...");
 
     while let Some(update_res) = stream.next().await {
-        let update: SubscribeUpdate = match update_res {
+        let update = match update_res {
             Ok(u) => u,
             Err(e) => {
                 error!("Stream error: {:?}", e);
@@ -113,10 +105,8 @@ async fn main() -> Result<()> {
 
         if let Some(update_oneof) = update.update_oneof {
             match update_oneof {
-                geyser::subscribe_update::UpdateOneof::Slot(slot_update) => {
-                    info!("Slot received: {} ({:?})", slot_update.slot, slot_update.status());
-                }
-                geyser::subscribe_update::UpdateOneof::Transaction(tx_update) => {
+                UpdateOneof::Slot(_) => {}
+                UpdateOneof::Transaction(tx_update) => {
                     if let Some(tx_info) = tx_update.transaction {
                         let signature = bs58::encode(&tx_info.signature).into_string();
 
@@ -127,12 +117,15 @@ async fn main() -> Result<()> {
                                         continue;
                                     }
 
-                                    let program_id = &message.account_keys[ix.program_id_index as usize];
-                                    let program_id_str = bs58::encode(program_id).into_string();
+                                    let program_id =
+                                        &message.account_keys[ix.program_id_index as usize];
+                                    let program_id_str =
+                                        bs58::encode(program_id).into_string();
 
                                     if program_id_str == memo_program_id {
-                                        let mut text = String::from_utf8(ix.data.clone()).ok();
-                                        
+                                        let mut text =
+                                            String::from_utf8(ix.data.clone()).ok();
+
                                         if text.is_none() {
                                             if let Ok(decoded) = STANDARD.decode(&ix.data) {
                                                 text = String::from_utf8(decoded).ok();
@@ -140,18 +133,27 @@ async fn main() -> Result<()> {
                                         }
 
                                         if let Some(content) = text {
-                                            if let Ok(json) = serde_json::from_str::<Value>(&content) {
-                                                let provider = json["provider"].as_str().unwrap_or("unknown");
-                                                let timestamp = json["timestamp"].as_u64().unwrap_or(0);
+                                            if let Ok(json) =
+                                                serde_json::from_str::<Value>(&content)
+                                            {
+                                                let provider = json["provider"]
+                                                    .as_str()
+                                                    .unwrap_or("unknown");
+                                                let timestamp = json["timestamp"]
+                                                    .as_u64()
+                                                    .unwrap_or(0);
 
-                                                let now = chrono::Utc::now().timestamp_millis() as u64;
+                                                let now =
+                                                    chrono::Utc::now().timestamp_millis()
+                                                        as u64;
                                                 let latency = now.saturating_sub(timestamp);
 
                                                 info!(
                                                     signature = %signature,
+                                                    slot = tx_update.slot,
                                                     provider = %provider,
                                                     latency_ms = latency,
-                                                    "🔥 Matched test tx"
+                                                    "Matched scheduler tx"
                                                 );
 
                                                 // Publish to Kafka for downstream ingestion
@@ -173,10 +175,10 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-
-                geyser::subscribe_update::UpdateOneof::Ping(_) => {
+                UpdateOneof::Ping(_) => {
                     info!("Ping received");
                 }
+                UpdateOneof::Pong(_) => {}
                 _ => {}
             }
         }

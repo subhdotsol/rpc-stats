@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+yellowstone-grpc-client = "13.1.0"
+yellowstone-grpc-proto = "12.3.0"
+tonic = { version = "0.14", features = ["tls-native-roots", "tls-ring"] }
 tokio.workspace = true
-tonic = { version = "0.11", features = ["tls", "tls-webpki-roots"] }
-prost = "0.12"
-prost-types = "0.12"
 tokio-stream = "0.1"
 serde_json.workspace = true
 anyhow.workspace = true
@@ -16,12 +16,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 base64 = "0.21"
 bs58 = "0.5"
-dashmap = "5"
+chrono = { workspace = true }
 kafka = { path = "../../crates/kafka" }
 rpc-core = { path = "../../crates/core" }
-chrono = { workspace = true }
-
-
-
-[build-dependencies]
-tonic-build = "0.11"
