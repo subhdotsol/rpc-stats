@@ -43,3 +43,9 @@ pub const INCIDENTS_ACTIVE_TTL: u64 = 30;
 // NETWORK
 pub const NETWORK_CURRENT: &str = "network:current";
 pub const NETWORK_CURRENT_TTL: u64 = 5;
+
+// STAT ENGINE (written every 60s flush)
+pub fn provider_metrics_latest(id: &str) -> String {
+    format!("provider:{id}:metrics:latest")
+}
+pub const PROVIDER_METRICS_LATEST_TTL: u64 = 90;

@@ -1,28 +1,53 @@
-use actix_web::{get, post, App, HttpResponse, HttpServer, Responder};
-use serde_json::json;
-use rpc_core::types::HealthResponse;
+use actix_web::{App, HttpServer, web};
+use sqlx::postgres::PgPoolOptions;
+use tracing::info;
+use tracing_subscriber::EnvFilter;
 
-#[get("/internal/alerts/health")]
-async fn health() -> impl Responder {
-    HttpResponse::Ok().json(HealthResponse { status: "ok" })
-}
-
-#[post("/internal/alerts/test")]
-async fn test_alert() -> impl Responder {
-    println!("Triggering test alert...");
-    // Placeholder for triggering test alert
-    HttpResponse::Ok().json(json!({ "message": "Test alert triggered" }))
-}
+use alert_service::app_state::AppState;
+use alert_service::listener;
+use alert_service::routes;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let port = 7005;
-    println!("Starting alert-service on port {}", port);
+    dotenvy::dotenv().ok();
 
-    HttpServer::new(|| {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()),
+        )
+        .init();
+
+    let config = rpc_core::config::Config::from_env()
+        .expect("failed to load config from env");
+
+    // ── Postgres ─────────────────────────────────────────────────────────────
+    let pool = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&config.database_url)
+        .await
+        .expect("failed to connect to Postgres");
+
+    info!("connected to Postgres");
+
+    // ── Postgres LISTEN/NOTIFY for real-time incident alerts ─────────────────
+    listener::spawn_pg_listener(pool.clone());
+
+    // ── HTTP server ──────────────────────────────────────────────────────────
+    let state = AppState { db: pool };
+    let port: u16 = 7005;
+
+    info!("starting alert-service on port {port}");
+
+    HttpServer::new(move || {
         App::new()
-            .service(health)
-            .service(test_alert)
+            .app_data(web::Data::new(state.clone()))
+            .service(routes::health)
+            .service(routes::test_alert)
+            .service(routes::list_channels)
+            .service(routes::create_channel)
+            .service(routes::update_channel)
+            .service(routes::delete_channel)
+            .service(routes::alert_history)
     })
     .bind(("0.0.0.0", port))?
     .run()
