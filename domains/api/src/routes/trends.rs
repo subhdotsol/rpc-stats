@@ -26,7 +26,7 @@ async fn get_timeseries(
     };
 
     let sql = format!(
-        "SELECT time, provider_id, landing_rate, avg_confirm_ms, avg_slot_lag 
+        "SELECT time, provider_id, landing_rate::FLOAT, avg_confirm_ms, avg_slot_lag::FLOAT 
          FROM {} 
          WHERE time >= NOW() - INTERVAL '{}'
            AND region_id IS NULL AND fee_tier_id IS NULL
@@ -83,7 +83,7 @@ async fn get_tps_correlation(state: web::Data<AppState>) -> Result<HttpResponse,
 
     let rows = sqlx::query_as::<_, TpsRow>(
         r#"
-        SELECT time, provider_id, landing_rate, avg_network_tps
+        SELECT time, provider_id, landing_rate::FLOAT, avg_network_tps
         FROM provider_metrics_5m
         WHERE time >= NOW() - INTERVAL '24 hours'
           AND region_id IS NULL AND fee_tier_id IS NULL

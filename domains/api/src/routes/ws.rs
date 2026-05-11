@@ -14,7 +14,15 @@ async fn ws_handler(
     actix_web::rt::spawn(async move {
         // Send a ping every 20 seconds to keep connection alive
         let mut ping_interval = interval(Duration::from_secs(20));
-        let mut leaderboard_interval = interval(Duration::from_secs(30)); // match cron 30s
+        // Align interval with the next 30s boundary (00 or 30)
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let next_30s = 30 - (now % 30);
+        let mut leaderboard_interval = interval(Duration::from_secs(30));
+        // Skip the immediate tick
+        leaderboard_interval.tick().await;
+        
+        // Wait until the next 30s mark before starting the loop's interval logic
+        tokio::time::sleep(Duration::from_secs(next_30s)).await;
 
         loop {
             tokio::select! {
@@ -23,7 +31,6 @@ async fn ws_handler(
                 }
                 
                 _ = leaderboard_interval.tick() => {
-                    // Tell frontend that leaderboard might have updated
                     let _ = session.text("leaderboard_updated").await;
                 }
 

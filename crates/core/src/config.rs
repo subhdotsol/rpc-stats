@@ -22,6 +22,9 @@ pub struct Config {
     #[serde(default)]
     pub alchemy_rpc: String,
 
+    #[serde(default)]
+    pub triton_rpc: String,
+
     /// Defaults to `~/.config/solana/id.json`.
     #[serde(default = "default_keypair_path")]
     pub keypair_path: String,

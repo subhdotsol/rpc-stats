@@ -41,6 +41,7 @@ pub struct LeaderboardEntry {
     pub status: String,
     pub trend: String,
     pub trend_data: Vec<f64>,
+    pub last_tested_at: Option<DateTime<Utc>>,
 }
 
 

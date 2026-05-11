@@ -56,24 +56,52 @@ async fn get_leaderboard(
     .fetch_all(&state.db)
     .await?;
 
+    // 3. Fetch trend data (last 24h of 5m buckets)
+    #[derive(sqlx::FromRow)]
+    struct TrendPoint {
+        provider_id: String,
+        landing_rate: Option<f64>,
+    }
+
+    let trend_rows = sqlx::query_as::<_, TrendPoint>(
+        r#"
+        SELECT provider_id, landing_rate::FLOAT
+        FROM provider_metrics_5m
+        WHERE time >= NOW() - INTERVAL '24 hours'
+          AND region_id IS NULL AND fee_tier_id IS NULL
+        ORDER BY time ASC
+        "#
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut trend_map: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+    for tr in trend_rows {
+        trend_map.entry(tr.provider_id).or_default().push(tr.landing_rate.unwrap_or(0.0) * 100.0);
+    }
+
     let entries: Vec<LeaderboardEntry> = rows
         .into_iter()
-        .map(|r| LeaderboardEntry {
-            provider: r.provider_id,
-            rank: r.rank,
-            landing_rate: r.landing_rate.unwrap_or(0.0) * 100.0,
-            avg_confirm: r.avg_confirm_ms.unwrap_or(0),
-            slot_lag: r.avg_slot_lag.unwrap_or(0.0),
-            p95_latency: r.p95_latency_ms.unwrap_or(0),
-            claim_vs_reality: r.avg_claim_vs_reality_ms.unwrap_or(0),
-            uptime24h: r.uptime_24h.unwrap_or(0.0) * 100.0,
-            status: r.status.unwrap_or_else(|| "outage".to_string()),
-            trend: "stable".to_string(),
-            trend_data: vec![],
+        .map(|r| {
+            let t_data = trend_map.get(&r.provider_id).cloned().unwrap_or_default();
+            LeaderboardEntry {
+                provider: r.provider_id.clone(),
+                rank: r.rank,
+                landing_rate: r.landing_rate.unwrap_or(0.0) * 100.0,
+                avg_confirm: r.avg_confirm_ms.unwrap_or(0),
+                slot_lag: r.avg_slot_lag.unwrap_or(0.0),
+                p95_latency: r.p95_latency_ms.unwrap_or(0),
+                claim_vs_reality: r.avg_claim_vs_reality_ms.unwrap_or(0),
+                uptime24h: r.uptime_24h.unwrap_or(0.0) * 100.0,
+                status: r.status.unwrap_or_else(|| "outage".to_string()),
+                trend: "stable".to_string(),
+                trend_data: t_data,
+                last_tested_at: r.last_tested_at,
+            }
         })
         .collect();
 
-    // 3. Optional: Write-back to Redis if cold
+    // 4. Optional: Write-back to Redis if cold
     let _ = rpc_cache::set_json_ex(
         &state.redis,
         rpc_cache::keys::LEADERBOARD_CURRENT,

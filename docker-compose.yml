@@ -127,11 +127,21 @@ services:
     <<: *rust-service
     container_name: rpc_ingestion_service
     command: ["ingestion-service"]
+    depends_on:
+      kafka:
+        condition: service_healthy
 
   scheduler-service:
     <<: *rust-service
     container_name: rpc_scheduler_service
     command: ["scheduler-service"]
+    volumes:
+      - ~/.config/solana:/root/.config/solana:ro
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-pass}@postgres:5432/${POSTGRES_DB:-rpc}
+      - REDIS_URL=redis://redis:6379
+      - KAFKA_BROKERS=kafka:9092
+      - KEYPAIR_PATH=/root/.config/solana/id.json
 
   worker-service:
     <<: *rust-service

@@ -22,13 +22,13 @@ pub async fn refresh_leaderboard(pool: &PgPool, redis: &RedisPool) -> Result<()>
             -- Composite score (higher = better)
             (
               COALESCE(landing_rate, 0) * 0.50
-              + (1.0 / NULLIF(avg_confirm_ms, 0)) * 30000.0 * 0.30
-              + (1.0 / NULLIF(avg_slot_lag, 0))   * 5.0     * 0.20
+              + COALESCE((1.0 / NULLIF(avg_confirm_ms, 0)) * 30000.0 * 0.30, 0)
+              + COALESCE((1.0 / NULLIF(avg_slot_lag, 0))   * 5.0     * 0.20, 0)
             ) AS composite_score
           FROM provider_metrics_5m
           WHERE region_id IS NULL
             AND fee_tier_id IS NULL
-            AND time >= NOW() - INTERVAL '10 minutes'
+            AND time >= NOW() - INTERVAL '30 minutes'
             AND time = (
               SELECT MAX(time)
               FROM provider_metrics_5m pm2
@@ -45,7 +45,7 @@ pub async fn refresh_leaderboard(pool: &PgPool, redis: &RedisPool) -> Result<()>
           FROM provider_metrics_1m
           WHERE region_id IS NULL
             AND fee_tier_id IS NULL
-            AND time >= NOW() - INTERVAL '10 minutes'
+            AND time >= NOW() - INTERVAL '30 minutes'
             AND p95_latency_ms IS NOT NULL
           GROUP BY provider_id
         ),
@@ -115,7 +115,21 @@ pub async fn refresh_leaderboard(pool: &PgPool, redis: &RedisPool) -> Result<()>
 
     // 2. Query back the state
     let rows = sqlx::query_as::<_, LeaderboardRow>(
-        "SELECT * FROM leaderboard_current ORDER BY rank ASC"
+        r#"
+        SELECT 
+          provider_id, 
+          rank, 
+          landing_rate::FLOAT, 
+          avg_confirm_ms, 
+          avg_slot_lag::FLOAT, 
+          p95_latency_ms, 
+          avg_claim_vs_reality_ms, 
+          uptime_24h::FLOAT, 
+          status, 
+          last_tested_at
+        FROM leaderboard_current 
+        ORDER BY rank ASC
+        "#
     )
     .fetch_all(pool)
     .await?;
@@ -175,6 +189,7 @@ pub async fn refresh_leaderboard(pool: &PgPool, redis: &RedisPool) -> Result<()>
             status: r.status.unwrap_or_else(|| "outage".to_string()),
             trend,
             trend_data: t_data,
+            last_tested_at: r.last_tested_at,
         });
     }
 

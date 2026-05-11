@@ -117,8 +117,8 @@ pub async fn run_batch(
                     let kafka_tx = TxSubmitted {
                         signature: signature.to_string(),
                         provider_id: provider.name,
-                        region_id: "global".to_string(),
-                        fee_tier_id: "low".to_string(),
+                        region_id: "us-east".to_string(),
+                        fee_tier_id: "none".to_string(),
                         submitted_at: Utc::now(),
                         submitted_slot: None,
                         network_tps: None,

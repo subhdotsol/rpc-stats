@@ -132,7 +132,7 @@ async fn get_network_current(state: web::Data<AppState>) -> Result<HttpResponse,
 #[get("/time")]
 async fn get_server_time() -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(serde_json::json!({
-        "serverTimeMs": chrono::Utc::now().timestamp_millis()
+        "timestamp": chrono::Utc::now().timestamp_millis()
     })))
 }
 

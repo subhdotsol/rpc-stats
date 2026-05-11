@@ -54,6 +54,10 @@ async fn main() -> anyhow::Result<()> {
             name: "alchemy".to_string(),
             url: config.alchemy_rpc.clone(),
         },
+        RpcProvider {
+            name: "triton".to_string(),
+            url: config.triton_rpc.clone(),
+        },
     ];
 
     let payer = Arc::new(

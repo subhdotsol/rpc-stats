@@ -12,6 +12,7 @@ pub async fn setup_app_state() -> AppState {
         api_port: 8080,
         helius_rpc: "".to_string(),
         alchemy_rpc: "".to_string(),
+        triton_rpc: "".to_string(),
         keypair_path: "~/.config/solana/id.json".to_string(),
         probe_interval_secs: 30,
         kafka_brokers: "localhost:9092".to_string(),
