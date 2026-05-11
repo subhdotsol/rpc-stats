@@ -163,9 +163,40 @@ async fn get_test_runs(
 }
 
 
+#[get("/benchmarks/fees")]
+async fn get_fees(state: web::Data<AppState>) -> Result<HttpResponse, ApiError> {
+    #[derive(sqlx::FromRow, serde::Serialize)]
+    struct FeeBreakdownRow {
+        fee_tier: String,
+        provider_id: String,
+        avg_confirm_ms: i32,
+    }
+
+    let rows = sqlx::query_as::<_, FeeBreakdownRow>(
+        r#"
+        SELECT
+          ft.display_name AS fee_tier,
+          m.provider_id,
+          ROUND(AVG(m.avg_confirm_ms))::INT AS avg_confirm_ms
+        FROM fee_tiers ft
+        JOIN provider_metrics_5m m ON m.fee_tier_id = ft.id
+        WHERE m.time >= NOW() - INTERVAL '1 hour'
+          AND m.region_id IS NULL
+        GROUP BY ft.display_name, m.provider_id, ft.lamports
+        ORDER BY ft.lamports ASC, m.provider_id
+        "#
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(HttpResponse::Ok().json(ApiResponse { data: rows }))
+}
+
+
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(get_rpc_methods)
         .service(get_multi_region)
         .service(get_rank_history)
-        .service(get_test_runs);
+        .service(get_test_runs)
+        .service(get_fees);
 }

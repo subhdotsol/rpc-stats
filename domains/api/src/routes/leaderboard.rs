@@ -27,8 +27,12 @@ async fn get_leaderboard(
     }
 
     // 1. Try Redis first (hot path)
-    if let Some(rows) = rpc_cache::get_json::<Vec<LeaderboardRow>>(&state.redis, rpc_cache::keys::LEADERBOARD_CURRENT).await {
-        return Ok(HttpResponse::Ok().json(map_leaderboard_response(window, rows)));
+    if let Some(entries) = rpc_cache::get_json::<Vec<LeaderboardEntry>>(&state.redis, rpc_cache::keys::LEADERBOARD_CURRENT).await {
+        return Ok(HttpResponse::Ok().json(LeaderboardResponse {
+            window,
+            data: entries,
+            generated_at: Utc::now(),
+        }));
     }
 
     // 2. Fallback to DB
@@ -52,35 +56,36 @@ async fn get_leaderboard(
     .fetch_all(&state.db)
     .await?;
 
-    // 3. Optional: Write-back to Redis if cold (though cron usually handles this)
-    let _ = rpc_cache::set_json_ex(
-        &state.redis,
-        rpc_cache::keys::LEADERBOARD_CURRENT,
-        &rows,
-        rpc_cache::keys::LEADERBOARD_CURRENT_TTL
-    ).await;
-
-    Ok(HttpResponse::Ok().json(map_leaderboard_response(window, rows)))
-}
-
-fn map_leaderboard_response(window: String, rows: Vec<LeaderboardRow>) -> LeaderboardResponse {
     let entries: Vec<LeaderboardEntry> = rows
         .into_iter()
         .map(|r| LeaderboardEntry {
             provider: r.provider_id,
-            success_rate: r.landing_rate.unwrap_or(0.0),
-            avg_latency_ms: r.avg_confirm_ms.unwrap_or(0),
-            avg_block_lag: r.avg_slot_lag.unwrap_or(0.0),
-            total_requests: 0,
-            failed_requests: 0,
+            rank: r.rank,
+            landing_rate: r.landing_rate.unwrap_or(0.0) * 100.0,
+            avg_confirm: r.avg_confirm_ms.unwrap_or(0),
+            slot_lag: r.avg_slot_lag.unwrap_or(0.0),
+            p95_latency: r.p95_latency_ms.unwrap_or(0),
+            claim_vs_reality: r.avg_claim_vs_reality_ms.unwrap_or(0),
+            uptime24h: r.uptime_24h.unwrap_or(0.0) * 100.0,
+            status: r.status.unwrap_or_else(|| "outage".to_string()),
+            trend: "stable".to_string(),
+            trend_data: vec![],
         })
         .collect();
 
-    LeaderboardResponse {
+    // 3. Optional: Write-back to Redis if cold
+    let _ = rpc_cache::set_json_ex(
+        &state.redis,
+        rpc_cache::keys::LEADERBOARD_CURRENT,
+        &entries,
+        rpc_cache::keys::LEADERBOARD_CURRENT_TTL
+    ).await;
+
+    Ok(HttpResponse::Ok().json(LeaderboardResponse {
         window,
         data: entries,
         generated_at: Utc::now(),
-    }
+    }))
 }
 
 

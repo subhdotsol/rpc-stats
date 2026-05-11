@@ -18,37 +18,53 @@ pub async fn detect_incidents(pool: &PgPool, redis: &RedisPool) -> Result<()> {
     // 1. Find providers breaching thresholds in the last 5 minutes
     let breaches: Vec<BreachRow> = sqlx::query_as(
         r#"
+        WITH metrics AS (
+          SELECT
+            pm5.provider_id,
+            pm5.landing_rate,
+            p95.p95_latency_ms
+          FROM provider_metrics_5m pm5
+          LEFT JOIN LATERAL (
+            SELECT PERCENTILE_DISC(0.95) WITHIN GROUP (ORDER BY p95_latency_ms) AS p95_latency_ms
+            FROM provider_metrics_1m pm1
+            WHERE pm1.provider_id = pm5.provider_id
+              AND pm1.region_id IS NULL
+              AND pm1.fee_tier_id IS NULL
+              AND pm1.time >= NOW() - INTERVAL '6 minutes'
+              AND pm1.p95_latency_ms IS NOT NULL
+          ) p95 ON TRUE
+          WHERE pm5.time >= NOW() - INTERVAL '6 minutes'
+            AND pm5.time = (
+              SELECT MAX(time) FROM provider_metrics_5m pm2
+              WHERE pm2.provider_id  = pm5.provider_id
+                AND pm2.region_id    IS NULL
+                AND pm2.fee_tier_id  IS NULL
+            )
+            AND pm5.region_id   IS NULL
+            AND pm5.fee_tier_id IS NULL
+            AND (
+              pm5.landing_rate < 0.92
+              OR COALESCE(p95.p95_latency_ms, 0) > 2000
+            )
+        )
         SELECT
           provider_id,
           CASE
-            WHEN landing_rate < 0.80   THEN 'outage'
-            WHEN landing_rate < 0.92   THEN 'degraded'
-            WHEN p95_latency_ms > 2000 THEN 'degraded'
+            WHEN landing_rate < 0.80                        THEN 'outage'
+            WHEN landing_rate < 0.92                        THEN 'degraded'
+            WHEN COALESCE(p95_latency_ms, 0) > 2000        THEN 'degraded'
           END AS incident_type,
           CASE
-            WHEN landing_rate < 0.80   THEN 'landing_rate'
-            WHEN landing_rate < 0.92   THEN 'landing_rate'
-            WHEN p95_latency_ms > 2000 THEN 'p95_latency'
+            WHEN landing_rate < 0.80                        THEN 'landing_rate'
+            WHEN landing_rate < 0.92                        THEN 'landing_rate'
+            WHEN COALESCE(p95_latency_ms, 0) > 2000        THEN 'p95_latency'
           END AS trigger_metric,
           CASE
-            WHEN landing_rate < 0.80   THEN landing_rate
-            WHEN landing_rate < 0.92   THEN landing_rate
-            WHEN p95_latency_ms > 2000 THEN p95_latency_ms::DECIMAL
+            WHEN landing_rate < 0.80                        THEN landing_rate
+            WHEN landing_rate < 0.92                        THEN landing_rate
+            WHEN COALESCE(p95_latency_ms, 0) > 2000        THEN p95_latency_ms::DECIMAL
           END AS trigger_value
-        FROM provider_metrics_5m
-        WHERE time >= NOW() - INTERVAL '6 minutes'
-          AND time = (
-            SELECT MAX(time) FROM provider_metrics_5m pm2
-            WHERE pm2.provider_id  = provider_metrics_5m.provider_id
-              AND pm2.region_id    IS NULL
-              AND pm2.fee_tier_id  IS NULL
-          )
-          AND region_id   IS NULL
-          AND fee_tier_id IS NULL
-          AND (
-            landing_rate   < 0.92
-            OR p95_latency_ms > 2000
-          )
+        FROM metrics
         "#,
     )
     .fetch_all(pool)

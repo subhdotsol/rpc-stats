@@ -30,7 +30,7 @@ CREATE TABLE fee_tiers (
 
 INSERT INTO providers (id, display_name, logo_url, description, website, founded_year, hq_location) VALUES
     ('helius',    'Helius',    NULL, 'The complete Solana developer platform',              'https://helius.dev',      2022, 'San Francisco, CA'),
-    ('quicknode', 'QuickNode', NULL, 'Web3 infrastructure for everyone',                   'https://quicknode.com',   2017, 'Miami, FL'),
+    -- ('quicknode', 'QuickNode', NULL, 'Web3 infrastructure for everyone',                   'https://quicknode.com',   2017, 'Miami, FL'),
     ('triton',    'Triton',    NULL, 'Enterprise-grade Solana infrastructure with Yellowstone gRPC', 'https://triton.one', 2021, 'Remote'),
     ('alchemy',   'Alchemy',   NULL, 'The web3 development platform powering millions of users', 'https://alchemy.com', 2017, 'San Francisco, CA');
 

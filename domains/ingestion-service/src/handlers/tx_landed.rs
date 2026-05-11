@@ -1,6 +1,6 @@
 use rpc_core::types::TxLanded;
 use sqlx::{Pool, Postgres};
-use tracing::{debug, warn};
+use tracing::{debug};
 
 pub async fn handle(pool: &Pool<Postgres>, tx: TxLanded) -> anyhow::Result<()> {
     // 1. Update tx_results with landing info

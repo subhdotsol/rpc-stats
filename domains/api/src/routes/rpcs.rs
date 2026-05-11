@@ -314,14 +314,138 @@ async fn get_latest_tests(
     Ok(HttpResponse::Ok().json(ApiResponse { data: rows }))
 }
 
+#[get("/{id}/methods")]
+async fn get_provider_methods(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> Result<HttpResponse, ApiError> {
+    use rpc_core::types::db_models::RpcMethodRow;
+    
+    let provider_id = path.into_inner();
+    
+    let rows = sqlx::query_as::<_, RpcMethodRow>(
+        r#"
+        SELECT
+          method_name,
+          method_type,
+          provider_id,
+          ROUND(AVG(p50_ms))::INT  AS p50_ms,
+          ROUND(AVG(p95_ms))::INT  AS p95_ms,
+          ROUND(AVG(p99_ms))::INT  AS p99_ms,
+          AVG(error_rate)::FLOAT   AS error_rate
+        FROM rpc_method_metrics
+        WHERE time >= NOW() - INTERVAL '1 hour'
+          AND provider_id = $1
+        GROUP BY method_name, method_type, provider_id
+        ORDER BY method_name
+        "#
+    )
+    .bind(&provider_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(HttpResponse::Ok().json(ApiResponse { data: rows }))
+}
+
+// ── Provider profiles (features + pricing + metadata) ────────────────────────
+
+#[derive(Serialize, sqlx::FromRow)]
+struct ProviderProfileRow {
+    id: String,
+    display_name: String,
+    description: Option<String>,
+    website: Option<String>,
+    founded_year: Option<i32>,
+    hq_location: Option<String>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct FeatureRow {
+    provider_id: String,
+    feature_name: String,
+    description: Option<String>,
+    is_supported: bool,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct PricingRow {
+    provider_id: String,
+    tier_name: String,
+    price_usd_mo: Option<i32>,
+    rps_limit: Option<i32>,
+    request_limit: Option<i64>,
+    sort_order: i32,
+}
+
+#[derive(Serialize)]
+struct ProviderProfile {
+    id: String,
+    display_name: String,
+    description: Option<String>,
+    website: Option<String>,
+    founded_year: Option<i32>,
+    hq_location: Option<String>,
+    features: Vec<FeatureRow>,
+    pricing: Vec<PricingRow>,
+}
+
+#[get("/profiles")]
+async fn get_provider_profiles(state: web::Data<AppState>) -> Result<HttpResponse, ApiError> {
+    let providers = sqlx::query_as::<_, ProviderProfileRow>(
+        "SELECT id, display_name, description, website, founded_year, hq_location FROM providers ORDER BY id"
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let features = sqlx::query_as::<_, FeatureRow>(
+        "SELECT provider_id, feature_name, description, is_supported FROM provider_features ORDER BY provider_id, feature_name"
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let pricing = sqlx::query_as::<_, PricingRow>(
+        "SELECT provider_id, tier_name, price_usd_mo, rps_limit, request_limit, sort_order FROM provider_pricing ORDER BY provider_id, sort_order"
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut features_map: HashMap<String, Vec<FeatureRow>> = HashMap::new();
+    for f in features {
+        features_map.entry(f.provider_id.clone()).or_default().push(f);
+    }
+
+    let mut pricing_map: HashMap<String, Vec<PricingRow>> = HashMap::new();
+    for p in pricing {
+        pricing_map.entry(p.provider_id.clone()).or_default().push(p);
+    }
+
+    let profiles: Vec<ProviderProfile> = providers
+        .into_iter()
+        .map(|p| ProviderProfile {
+            features: features_map.remove(&p.id).unwrap_or_default(),
+            pricing: pricing_map.remove(&p.id).unwrap_or_default(),
+            id: p.id,
+            display_name: p.display_name,
+            description: p.description,
+            website: p.website,
+            founded_year: p.founded_year,
+            hq_location: p.hq_location,
+        })
+        .collect();
+
+    Ok(HttpResponse::Ok().json(ApiResponse { data: profiles }))
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/rpcs")
             .service(list_rpcs)
+            .service(get_provider_profiles)
             .service(get_rpc)
             .service(get_rpc_timeseries)
             .service(get_fee_breakdown)
             .service(get_region_latency)
-            .service(get_latest_tests),
+            .service(get_latest_tests)
+            .service(get_provider_methods),
     );
 }

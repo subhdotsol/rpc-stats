@@ -28,13 +28,19 @@ pub struct LeaderboardResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LeaderboardEntry {
     pub provider: String,
-    pub success_rate: f64,
-    pub avg_latency_ms: i32,
-    pub avg_block_lag: f64,
-    pub total_requests: i32,
-    pub failed_requests: i32,
+    pub rank: i32,
+    pub landing_rate: f64,
+    pub avg_confirm: i32,
+    pub slot_lag: f64,
+    pub p95_latency: i32,
+    pub claim_vs_reality: i32,
+    pub uptime24h: f64,
+    pub status: String,
+    pub trend: String,
+    pub trend_data: Vec<f64>,
 }
 
 

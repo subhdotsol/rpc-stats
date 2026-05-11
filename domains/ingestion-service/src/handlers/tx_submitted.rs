@@ -1,6 +1,6 @@
 use rpc_core::types::TxSubmitted;
 use sqlx::{Pool, Postgres, Row};
-use tracing::{debug, error};
+use tracing::{debug};
 
 
 pub async fn handle(pool: &Pool<Postgres>, tx: TxSubmitted) -> anyhow::Result<()> {

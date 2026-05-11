@@ -6,6 +6,8 @@ pub mod incidents;
 pub mod system;
 pub mod benchmarks;
 pub mod health;
+pub mod trends;
+pub mod ws;
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     // Top-level endpoints
@@ -19,5 +21,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .configure(incidents::config)
             .configure(system::config)
             .configure(benchmarks::config)
+            .configure(trends::config)
+            .configure(ws::config)
     );
 }

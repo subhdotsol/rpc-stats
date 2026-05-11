@@ -2,7 +2,9 @@ use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::Utc;
 use kafka::topics::tx_landed::produce_tx_landed;
-use rpc_core::types::TxLanded;
+use kafka::topics::tx_confirmed::produce_tx_confirmed;
+use kafka::FutureProducer;
+use rpc_core::types::{TxLanded, TxConfirmed};
 use serde_json::Value;
 use std::collections::HashMap;
 use tokio_stream::StreamExt;
@@ -14,42 +16,23 @@ use yellowstone_grpc_proto::geyser::{
     subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
     SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
 };
+use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    dotenvy::dotenv().ok();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-
-    let endpoint = std::env::var("GRPC_ENDPOINT")
-        .unwrap_or_else(|_| "https://aequa-solanad-d5c3.devnet.rpcpool.com".to_string());
-    let token = std::env::var("X_TOKEN").ok();
-    let memo_program_id = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
-
-    info!("Connecting to Yellowstone gRPC at {}...", endpoint);
-    info!("Token present: {}", token.is_some());
-
-    // Initialize Kafka producer
-    let config = rpc_core::config::Config::from_env().expect("Failed to load config");
-    let producer = std::sync::Arc::new(
-        kafka::create_producer(&config.kafka_brokers)
-    );
-
+async fn run_subscription(
+    endpoint: String,
+    token: Option<String>,
+    payer_pubkey: String,
+    memo_program_id: String,
+    commitment: CommitmentLevel,
+    producer: Arc<FutureProducer>,
+) -> Result<()> {
     let mut client = GeyserGrpcClient::build_from_shared(endpoint)?
         .x_token(token)?
         .tls_config(ClientTlsConfig::new().with_native_roots())?
         .connect()
         .await?;
 
-    info!("Connected! Setting up subscription...");
-
-    let payer_pubkey = std::env::var("PAYER_PUBKEY")
-        .unwrap_or_else(|_| "5GHnVhqZ6Yn8mQmM43CwMRTNWZofeyExMkP6PDGCAc9d".to_string());
-
-    info!("Filtering for payer: {}", payer_pubkey);
+    info!("Connected for commitment {:?}! Setting up subscription...", commitment);
 
     let mut transactions = HashMap::new();
     transactions.insert(
@@ -61,8 +44,8 @@ async fn main() -> Result<()> {
             account_include: vec![],
             account_exclude: vec![],
             account_required: vec![
-                memo_program_id.to_string(),
-                payer_pubkey,
+                memo_program_id.clone(),
+                payer_pubkey.clone(),
             ],
         },
     );
@@ -85,27 +68,26 @@ async fn main() -> Result<()> {
             blocks: HashMap::new(),
             blocks_meta: HashMap::new(),
             entry: HashMap::new(),
-            commitment: Some(CommitmentLevel::Processed as i32),
+            commitment: Some(commitment as i32),
             accounts_data_slice: vec![],
             ping: None,
             from_slot: None,
         }))
         .await?;
 
-    info!("Subscribed! Waiting for devnet transactions...");
+    info!("Subscribed to {:?}! Waiting for devnet transactions...", commitment);
 
     while let Some(update_res) = stream.next().await {
         let update = match update_res {
             Ok(u) => u,
             Err(e) => {
-                error!("Stream error: {:?}", e);
+                error!("Stream error for {:?}: {:?}", commitment, e);
                 break;
             }
         };
 
         if let Some(update_oneof) = update.update_oneof {
             match update_oneof {
-                UpdateOneof::Slot(_) => {}
                 UpdateOneof::Transaction(tx_update) => {
                     if let Some(tx_info) = tx_update.transaction {
                         let signature = bs58::encode(&tx_info.signature).into_string();
@@ -148,24 +130,47 @@ async fn main() -> Result<()> {
                                                         as u64;
                                                 let latency = now.saturating_sub(timestamp);
 
-                                                info!(
-                                                    signature = %signature,
-                                                    slot = tx_update.slot,
-                                                    provider = %provider,
-                                                    latency_ms = latency,
-                                                    "Matched scheduler tx"
-                                                );
+                                                match commitment {
+                                                    CommitmentLevel::Processed => {
+                                                        info!(
+                                                            signature = %signature,
+                                                            slot = tx_update.slot,
+                                                            provider = %provider,
+                                                            latency_ms = latency,
+                                                            "Matched scheduler tx (PROCESSED)"
+                                                        );
 
-                                                // Publish to Kafka for downstream ingestion
-                                                let kafka_tx = TxLanded {
-                                                    signature: signature.clone(),
-                                                    provider_id: provider.to_string(),
-                                                    landed_slot: tx_update.slot as i64,
-                                                    geyser_landed_at: Utc::now(),
-                                                };
+                                                        let kafka_tx = TxLanded {
+                                                            signature: signature.clone(),
+                                                            provider_id: provider.to_string(),
+                                                            landed_slot: tx_update.slot as i64,
+                                                            geyser_landed_at: Utc::now(),
+                                                        };
 
-                                                if let Err(e) = produce_tx_landed(&producer, &kafka_tx).await {
-                                                    error!(sig = %signature, "Failed to publish tx.landed to Kafka: {:?}", e);
+                                                        if let Err(e) = produce_tx_landed(&producer, &kafka_tx).await {
+                                                            error!(sig = %signature, "Failed to publish tx.landed to Kafka: {:?}", e);
+                                                        }
+                                                    }
+                                                    CommitmentLevel::Confirmed => {
+                                                        info!(
+                                                            signature = %signature,
+                                                            slot = tx_update.slot,
+                                                            provider = %provider,
+                                                            latency_ms = latency,
+                                                            "Matched scheduler tx (CONFIRMED)"
+                                                        );
+
+                                                        let kafka_tx = TxConfirmed {
+                                                            signature: signature.clone(),
+                                                            provider_id: provider.to_string(),
+                                                            rpc_confirmed_at: Utc::now(),
+                                                        };
+
+                                                        if let Err(e) = produce_tx_confirmed(&producer, &kafka_tx).await {
+                                                            error!(sig = %signature, "Failed to publish tx.confirmed to Kafka: {:?}", e);
+                                                        }
+                                                    }
+                                                    _ => {}
                                                 }
                                             }
                                         }
@@ -176,12 +181,65 @@ async fn main() -> Result<()> {
                     }
                 }
                 UpdateOneof::Ping(_) => {
-                    info!("Ping received");
+                    info!("Ping received ({:?})", commitment);
                 }
                 UpdateOneof::Pong(_) => {}
                 _ => {}
             }
         }
+    }
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+
+    let endpoint = std::env::var("GRPC_ENDPOINT")
+        .unwrap_or_else(|_| "https://aequa-solanad-d5c3.devnet.rpcpool.com".to_string());
+    let token = std::env::var("X_TOKEN").ok();
+    let memo_program_id = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
+
+    info!("Geyser Consumer starting...");
+
+    let config = rpc_core::config::Config::from_env().expect("Failed to load config");
+    let producer = Arc::new(
+        kafka::create_producer(&config.kafka_brokers)
+    );
+
+    let payer_pubkey = std::env::var("PAYER_PUBKEY")
+        .unwrap_or_else(|_| "5GHnVhqZ6Yn8mQmM43CwMRTNWZofeyExMkP6PDGCAc9d".to_string());
+
+    let (res1, res2) = tokio::join!(
+        run_subscription(
+            endpoint.clone(),
+            token.clone(),
+            payer_pubkey.clone(),
+            memo_program_id.to_string(),
+            CommitmentLevel::Processed,
+            producer.clone(),
+        ),
+        run_subscription(
+            endpoint.clone(),
+            token.clone(),
+            payer_pubkey.clone(),
+            memo_program_id.to_string(),
+            CommitmentLevel::Confirmed,
+            producer.clone(),
+        )
+    );
+
+    if let Err(e) = res1 {
+        error!("Processed subscription error: {:?}", e);
+    }
+    if let Err(e) = res2 {
+        error!("Confirmed subscription error: {:?}", e);
     }
 
     Ok(())
