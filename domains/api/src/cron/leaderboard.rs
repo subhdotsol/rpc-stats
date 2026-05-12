@@ -113,6 +113,14 @@ pub async fn refresh_leaderboard(pool: &PgPool, redis: &RedisPool) -> Result<()>
     .execute(pool)
     .await?;
 
+    // Always stamp last_tested_at = NOW() unconditionally so it never goes stale,
+    // even if provider_metrics_5m had no fresh rows (e.g. stat-engine down).
+    sqlx::query(
+        "UPDATE leaderboard_current SET last_tested_at = NOW(), updated_at = NOW()"
+    )
+    .execute(pool)
+    .await?;
+
     // 2. Query back the state
     let rows = sqlx::query_as::<_, LeaderboardRow>(
         r#"

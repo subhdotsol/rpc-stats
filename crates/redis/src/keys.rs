@@ -5,7 +5,7 @@
 
 // LEADERBOARD
 pub const LEADERBOARD_CURRENT: &str = "leaderboard:current";
-pub const LEADERBOARD_CURRENT_TTL: u64 = 35;
+pub const LEADERBOARD_CURRENT_TTL: u64 = 60; // cron runs every 30s; 60s gives 1 missed-cycle buffer
 
 // PER-PROVIDER
 pub fn provider_fee_breakdown(id: &str) -> String {
@@ -30,7 +30,7 @@ pub const PROVIDER_TREND_7D_TTL: u64 = 300;
 
 // TEST RUNS
 pub const TEST_RUNS_LATEST: &str = "test-runs:latest";
-pub const TEST_RUNS_LATEST_TTL: u64 = 10;
+pub const TEST_RUNS_LATEST_TTL: u64 = 30; // matches the 30s scheduler sweep
 
 // BENCHMARKS
 pub const BENCHMARKS_RPC_METHODS: &str = "benchmarks:rpc-methods";
