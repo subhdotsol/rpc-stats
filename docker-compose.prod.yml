@@ -4,7 +4,6 @@
 # Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 x-prod-image: &prod-image
-  build: !reset null
   image: ${DOCKERHUB_USERNAME}/rpc-stats:latest
 
 services:
@@ -15,6 +14,9 @@ services:
 
   redis:
     ports: !reset []
+
+  db-migrator:
+    <<: *prod-image
 
   api:
     <<: *prod-image

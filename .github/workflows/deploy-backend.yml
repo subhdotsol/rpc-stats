@@ -93,6 +93,7 @@ jobs:
             POSTGRES_DB=${{ secrets.POSTGRES_DB }}
             HELIUS_RPC=${{ secrets.HELIUS_RPC }}
             ALCHEMY_RPC=${{ secrets.ALCHEMY_RPC }}
+            TRITON_RPC=${{ secrets.TRITON_RPC }}
             GRPC_ENDPOINT=${{ secrets.GRPC_ENDPOINT }}
             X_TOKEN=${{ secrets.X_TOKEN }}
             PAYER_PUBKEY=${{ secrets.PAYER_PUBKEY }}
@@ -111,10 +112,13 @@ jobs:
             # ── Restart app containers only ─────────────────────────────────
             # Infrastructure (postgres, redis, kafka) is NOT restarted —
             # it was started manually on first deploy and persists across updates.
+            # Remove stale db-migrator container (local-build image no longer exists)
+            docker rm rpc_db_migrator 2>/dev/null || true
+
             docker compose \
               -f docker-compose.yml \
               -f docker-compose.prod.yml \
-              up -d --no-deps \
+              up -d --no-deps --no-build \
               api \
               scheduler-service \
               stat-engine \
