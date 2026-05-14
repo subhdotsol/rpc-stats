@@ -117,4 +117,5 @@ pub struct SummaryResponse {
     pub unhealthy_rpcs: i32,
     pub active_incidents: i32,
     pub avg_latency_ms: i32,
+    pub transactions_tested_today: i64,
 }

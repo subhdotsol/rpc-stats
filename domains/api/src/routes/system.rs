@@ -21,6 +21,11 @@ struct AvgLatency {
     avg: Option<f64>,
 }
 
+#[derive(Serialize, Deserialize, sqlx::FromRow)]
+struct TransactionsTestedCount {
+    count: Option<i64>,
+}
+
 #[get("/summary")]
 async fn get_summary(state: web::Data<AppState>) -> Result<HttpResponse, ApiError> {
     // Basic aggregation
@@ -77,12 +82,24 @@ async fn get_summary(state: web::Data<AppState>) -> Result<HttpResponse, ApiErro
         None => 0
     };
 
+    // Query 4: Transactions tested today (last 24 hours)
+    let tx_count_record = sqlx::query_as::<_, TransactionsTestedCount>(
+        r#"
+        SELECT COUNT(*) as count 
+        FROM transactions 
+        WHERE submitted_at >= NOW() - INTERVAL '24 HOURS'
+        "#
+    )
+    .fetch_one(&state.db)
+    .await?;
+
     Ok(HttpResponse::Ok().json(SummaryResponse {
         total_rpcs: total as i32,
         healthy_rpcs: healthy as i32,
         unhealthy_rpcs: unhealthy as i32,
         active_incidents: incidents_record.count.unwrap_or(0) as i32,
         avg_latency_ms: avg_latency,
+        transactions_tested_today: tx_count_record.count.unwrap_or(0),
     }))
 }
 
