@@ -1,0 +1,130 @@
+name: Build, Push & Deploy Backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'domains/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'docker-compose.prod.yml'
+      - 'nginx/**'
+      - '.github/workflows/deploy-backend.yml'
+  workflow_dispatch:   # allow manual trigger from GitHub UI
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/rpc-stats
+
+jobs:
+  # ── Step 1: Build & push Docker image to DockerHub ─────────────────────────
+  build-and-push:
+    name: Build & Push to DockerHub
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract Docker metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build & push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub Actions cache — speeds up subsequent builds significantly
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Step 2: Deploy to DigitalOcean Droplet via SSH ─────────────────────────
+  deploy:
+    name: Deploy to Droplet
+    needs: build-and-push      # only runs after image is pushed
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (needed for compose + nginx files)
+        uses: actions/checkout@v4
+
+      - name: Copy files to Droplet
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: ${{ secrets.DO_USER }}
+          key: ${{ secrets.DO_SSH_KEY }}
+          source: "docker-compose.yml,docker-compose.prod.yml,nginx/rpc-stats.conf"
+          target: "/opt/rpc-stats"
+
+      - name: Deploy on Droplet
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: ${{ secrets.DO_USER }}
+          key: ${{ secrets.DO_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/rpc-stats
+
+            # ── Write .env from GitHub secrets ──────────────────────────────
+            cat > .env <<'ENVEOF'
+            POSTGRES_USER=${{ secrets.POSTGRES_USER }}
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            POSTGRES_DB=${{ secrets.POSTGRES_DB }}
+            HELIUS_RPC=${{ secrets.HELIUS_RPC }}
+            ALCHEMY_RPC=${{ secrets.ALCHEMY_RPC }}
+            GRPC_ENDPOINT=${{ secrets.GRPC_ENDPOINT }}
+            X_TOKEN=${{ secrets.X_TOKEN }}
+            PAYER_PUBKEY=${{ secrets.PAYER_PUBKEY }}
+            PROBE_INTERVAL_SECS=30
+            CORS_ORIGIN=https://rpc-frontend-seven.vercel.app
+            DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
+            ENVEOF
+
+            # ── Log in to DockerHub ─────────────────────────────────────────
+            echo "${{ secrets.DOCKERHUB_TOKEN }}" | \
+              docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+            # ── Pull latest image ───────────────────────────────────────────
+            docker pull ${{ env.IMAGE_NAME }}:latest
+
+            # ── Restart app containers only ─────────────────────────────────
+            # Infrastructure (postgres, redis, kafka) is NOT restarted —
+            # it was started manually on first deploy and persists across updates.
+            docker compose \
+              -f docker-compose.yml \
+              -f docker-compose.prod.yml \
+              up -d --no-deps \
+              api \
+              scheduler-service \
+              stat-engine \
+              geyser-consumer \
+              ingestion-service \
+              alert-service
+
+            # ── Install / refresh Nginx config ──────────────────────────────
+            sudo cp nginx/rpc-stats.conf /etc/nginx/sites-available/rpc-stats
+            sudo ln -sf /etc/nginx/sites-available/rpc-stats /etc/nginx/sites-enabled/rpc-stats
+            sudo nginx -t && sudo systemctl reload nginx
+
+            echo "✅ Deploy complete — image: ${{ env.IMAGE_NAME }}:latest"

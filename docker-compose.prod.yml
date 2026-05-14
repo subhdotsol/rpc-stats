@@ -1,0 +1,31 @@
+# Production override — swaps build: . for image: from DockerHub
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# This file is used by the GitHub Actions deploy workflow.
+# Do NOT use this locally — use plain docker-compose.yml for local dev.
+
+x-prod-image: &prod-image
+  build: !reset null          # cancel the base build: .
+  image: ${DOCKERHUB_USERNAME}/rpc-stats:latest
+
+services:
+  db-migrator:
+    <<: *prod-image
+
+  api:
+    <<: *prod-image
+
+  alert-service:
+    <<: *prod-image
+
+  geyser-consumer:
+    <<: *prod-image
+
+  ingestion-service:
+    <<: *prod-image
+
+  scheduler-service:
+    <<: *prod-image
+
+  stat-engine:
+    <<: *prod-image

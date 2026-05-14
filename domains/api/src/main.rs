@@ -47,9 +47,19 @@ async fn main() -> std::io::Result<()> {
 
 
     HttpServer::new(move || {
-        let cors = actix_cors::Cors::default()
+        // Read additional allowed origin from env (set to Vercel URL in production)
+        let extra_origin = std::env::var("CORS_ORIGIN").unwrap_or_default();
+
+        let mut cors = actix_cors::Cors::default()
             .allowed_origin("http://localhost:3000")
             .allowed_origin("http://127.0.0.1:3000")
+            .allowed_origin("https://rpc-frontend-seven.vercel.app");
+
+        if !extra_origin.is_empty() {
+            cors = cors.allowed_origin(&extra_origin);
+        }
+
+        let cors = cors
             .allowed_methods(vec!["GET", "POST", "OPTIONS"])
             .allowed_headers(vec![
                 actix_web::http::header::CONTENT_TYPE,

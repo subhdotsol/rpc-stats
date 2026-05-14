@@ -110,6 +110,12 @@ services:
     command: ["api"]
     ports:
       - "8080:8080"
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-pass}@postgres:5432/${POSTGRES_DB:-rpc}
+      - REDIS_URL=redis://redis:6379
+      - KAFKA_BROKERS=kafka:9092
+      - API_HOST=0.0.0.0
+      - CORS_ORIGIN=${CORS_ORIGIN:-https://rpc-frontend-seven.vercel.app}
 
   alert-service:
     <<: *rust-service
@@ -143,20 +149,22 @@ services:
       - KAFKA_BROKERS=kafka:9092
       - KEYPAIR_PATH=/root/.config/solana/id.json
 
-  worker-service:
-    <<: *rust-service
-    container_name: rpc_worker_service
-    command: ["worker-service"]
+  # worker-service: DISABLED — not yet production-ready
+  # worker-service:
+  #   <<: *rust-service
+  #   container_name: rpc_worker_service
+  #   command: ["worker-service"]
 
   stat-engine:
     <<: *rust-service
     container_name: rpc_stat_engine
     command: ["stat-engine"]
 
-  incident-service:
-    <<: *rust-service
-    container_name: rpc_incident_service
-    command: ["incident-service"]
+  # incident-service: DISABLED — API cron handles incident detection
+  # incident-service:
+  #   <<: *rust-service
+  #   container_name: rpc_incident_service
+  #   command: ["incident-service"]
 
 volumes:
   postgres_data:
