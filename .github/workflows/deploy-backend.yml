@@ -125,6 +125,13 @@ jobs:
             # ── Install / refresh Nginx config ──────────────────────────────
             sudo cp nginx/rpc-stats.conf /etc/nginx/sites-available/rpc-stats
             sudo ln -sf /etc/nginx/sites-available/rpc-stats /etc/nginx/sites-enabled/rpc-stats
-            sudo nginx -t && sudo systemctl reload nginx
+            # Remove default site — it conflicts on server_name "_"
+            sudo rm -f /etc/nginx/sites-enabled/default
+            sudo nginx -t
+            # Start if first time, reload if already running
+            sudo systemctl enable nginx
+            sudo systemctl is-active --quiet nginx \
+              && sudo systemctl reload nginx \
+              || sudo systemctl start nginx
 
             echo "✅ Deploy complete — image: ${{ env.IMAGE_NAME }}:latest"
