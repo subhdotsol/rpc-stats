@@ -1,16 +1,20 @@
-# Production override — swaps build: . for image: from DockerHub
+# Production override — used by GitHub Actions deploy
+# - Swaps build: . for pre-built DockerHub image
+# - Removes postgres/redis/kafka host port bindings (conflicts with m8m-postgres on 5432)
 # Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-#
-# This file is used by the GitHub Actions deploy workflow.
-# Do NOT use this locally — use plain docker-compose.yml for local dev.
 
 x-prod-image: &prod-image
-  build: !reset null          # cancel the base build: .
+  build: !reset null
   image: ${DOCKERHUB_USERNAME}/rpc-stats:latest
 
 services:
-  db-migrator:
-    <<: *prod-image
+  # ── Remove conflicting host ports ──────────────────────────────────────────
+  # m8m-postgres already owns host:5432. Internal Docker networking still works.
+  postgres:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
 
   api:
     <<: *prod-image
